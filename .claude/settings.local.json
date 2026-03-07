@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(dir \"C:\\\\Users\\\\HP\\\\cooper-game\" /s /b)",
+      "Bash(dir \"C:\\\\Users\\\\HP\\\\cooper-game\\\\audio\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(curl:*)",
+      "Bash(python -m http.server:*)",
+      "Bash(git push:*)",
+      "Bash(rm:*)",
+      "Bash(start:*)"
+    ]
+  }
+}

@@ -1,0 +1,1765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Froge69 - Runner</title>
+    <link id="favicon" rel="icon" type="image/png">
+    <link id="apple-touch-icon" rel="apple-touch-icon" sizes="180x180">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a2e;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            position: relative;
+            max-width: 100vw;
+            max-height: 100vh;
+        }
+
+        #gameCanvas {
+            display: block;
+            background: #87CEEB;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .screen-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            text-shadow: 4px 4px 0 rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            font-size: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .screen-text {
+                font-size: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // ===== GAME CONFIGURATION =====
+        const CONFIG = {
+            // Canvas
+            WIDTH: 800,
+            HEIGHT: 400,
+
+            // Physics
+            GRAVITY: 0.8,
+            JUMP_FORCE: -15,
+
+            // Player
+            COOPER_X: 100,
+            COOPER_WIDTH: 50,
+            COOPER_HEIGHT: 50,
+            COOPER_GROUND_Y: 302,
+
+            // Game Speed
+            BASE_SPEED: 6,
+            SPEED_INCREASE_PER_LEVEL: 0.6,
+
+            // Obstacles
+            OBSTACLE_MIN_GAP: 400,
+            OBSTACLE_MAX_GAP: 700,
+            OBSTACLE_WIDTH: 24,
+
+            // Scoring
+            POINTS_PER_FRAME: 1,
+            POINTS_PER_LEVEL: 500,
+
+            // Ball Animation
+            BALL_DURATION: 90, // frames (1.5 seconds at 60fps)
+            BALL_SIZE: 14
+        };
+
+        // ===== GAME STATE =====
+        const GAME_STATE = {
+            TITLE: 'title',
+            ZOOM_TRANSITION: 'zoom_transition',
+            PLAYING: 'playing',
+            GAME_OVER: 'game_over'
+        };
+
+        // ===== LOAD FROGE IMAGE (title screen only) =====
+        let frogeImg = new Image();
+        frogeImg.src = 'froge.jpg';
+        let frogeImgLoaded = false;
+        frogeImg.onload = function() { frogeImgLoaded = true; };
+
+        // ===== GAME VARIABLES =====
+        let canvas, ctx;
+        let gameState = GAME_STATE.TITLE;
+        let score = 0;
+        let highScore = 0;
+        let level = 1;
+        let gameSpeed = CONFIG.BASE_SPEED;
+        let frameCount = 0;
+
+        // ===== SOUND SYSTEM =====
+        let audioContext = null;
+        let isMuted = false;
+
+        // Sound effect generators (created on first user interaction)
+        let soundsInitialized = false;
+
+        // ===== SOUND FUNCTIONS =====
+        function initAudio() {
+            if (soundsInitialized) return;
+
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                soundsInitialized = true;
+            } catch (e) {
+                console.log('Audio not supported:', e);
+            }
+        }
+
+        function toggleMute() {
+            isMuted = !isMuted;
+        }
+
+        // Simple jump sound using Web Audio API oscillator
+        function playJumpSound() {
+            if (!audioContext || isMuted) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(400, audioContext.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(600, audioContext.currentTime + 0.1);
+
+            gainNode.gain.setValueAtTime(0.15, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.15);
+        }
+
+        // Game over sound
+        function playGameOverSound() {
+            if (!audioContext || isMuted) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(300, audioContext.currentTime);
+            oscillator.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.3);
+
+            gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + 0.4);
+        }
+
+        // Player (Pepe)
+        let cooper = {
+            x: CONFIG.COOPER_X,
+            y: CONFIG.COOPER_GROUND_Y,
+            velocityY: 0,
+            isJumping: false,
+            animFrame: 0,
+            animTimer: 0,
+            prevLegFrame: -1,
+            prevPrevLegFrame: -1
+        };
+
+        // Ball
+        let ball = {
+            x: 50,
+            y: CONFIG.COOPER_GROUND_Y + 10,
+            velocityX: 0,
+            velocityY: 0,
+            frame: 0
+        };
+
+        // Obstacles
+        let obstacles = [];
+        let nextObstacleDistance = 0;
+
+        // Ground
+        let groundOffset = 0;
+
+        // Parallax background
+        let backgroundLayers = {
+            far: { offset: 0, speed: 0.15 },      // Floating dollar signs, coins
+            mid: { offset: 0, speed: 0.3 },       // Mansions, fancy buildings
+            near: { offset: 0, speed: 0.5 },      // Luxury cars, fountains
+        };
+
+        // Zoom transition
+        let zoomTransition = {
+            frame: 0,
+            maxFrames: 90,
+            scale: 3.0,
+            targetScale: 1.0
+        };
+
+        // Visual
+        let levelUpTimer = 0;
+        let isDayTime = false; // Always dark mode
+
+        // Mobile
+        let isMobile = false;
+
+        // ===== BANNER EXPORT =====
+        function exportBanner() {
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = 1500;
+            exportCanvas.height = 500;
+            const exportCtx = exportCanvas.getContext('2d');
+            exportCtx.imageSmoothingEnabled = false;
+
+            const bgGradient = exportCtx.createLinearGradient(0, 0, 0, 500);
+            bgGradient.addColorStop(0, '#0d1b2a');
+            bgGradient.addColorStop(1, '#1b263b');
+            exportCtx.fillStyle = bgGradient;
+            exportCtx.fillRect(0, 0, 1500, 500);
+
+            const groundY = 420;
+            exportCtx.fillStyle = '#3a2a00';
+            exportCtx.fillRect(0, groundY, 1500, 80);
+
+            const tempCanvas = canvas;
+            const tempCtx = ctx;
+            canvas = exportCanvas;
+            ctx = exportCtx;
+            exportCtx.save();
+            exportCtx.scale(4.5, 4.5);
+            drawCooper(120 / 4.5, 180 / 4.5, 0);
+            exportCtx.restore();
+            canvas = tempCanvas;
+            ctx = tempCtx;
+
+            const textCenterX = 900;
+
+            exportCtx.fillStyle = 'white';
+            exportCtx.strokeStyle = 'black';
+            exportCtx.lineWidth = 8;
+            exportCtx.font = 'bold 120px Courier New';
+            exportCtx.textAlign = 'center';
+            exportCtx.strokeText('FROGE69', textCenterX, 200);
+            exportCtx.fillText('FROGE69', textCenterX, 200);
+
+            exportCtx.font = 'bold 32px Courier New';
+            exportCtx.fillStyle = '#FFD700';
+            exportCtx.fillText('FROGE69 RUNNER', textCenterX, 250);
+
+            exportCtx.font = 'bold 28px Courier New';
+            exportCtx.fillStyle = 'white';
+            exportCtx.strokeStyle = 'black';
+            exportCtx.lineWidth = 5;
+            exportCtx.strokeText('PRESS SPACE TO FLEX', textCenterX, 300);
+            exportCtx.fillText('PRESS SPACE TO FLEX', textCenterX, 300);
+
+            exportCanvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = 'froge69-banner-1500x500.png';
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            }, 'image/png');
+        }
+
+        // ===== FAVICON GENERATION =====
+        function generateFavicons() {
+            function makeFavicon(size) {
+                const c = document.createElement('canvas');
+                c.width = size;
+                c.height = size;
+                const ic = c.getContext('2d');
+                ic.imageSmoothingEnabled = false;
+                ic.drawImage(frogeImg, 0, 0, size, size);
+                return c.toDataURL('image/png');
+            }
+
+            function setFavicons() {
+                document.getElementById('favicon').href = makeFavicon(32);
+                document.getElementById('apple-touch-icon').href = makeFavicon(180);
+            }
+
+            if (frogeImgLoaded) {
+                setFavicons();
+            } else {
+                frogeImg.addEventListener('load', setFavicons);
+            }
+        }
+
+        // ===== SPRITE EXPORT FUNCTIONS =====
+        function exportSprite(drawFunction, originalWidth, originalHeight, filename) {
+            const size = 2048;
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = size;
+            exportCanvas.height = size;
+            const exportCtx = exportCanvas.getContext('2d');
+
+            exportCtx.imageSmoothingEnabled = false;
+            exportCtx.clearRect(0, 0, size, size);
+
+            // Calculate scale (80% of canvas)
+            const targetSize = size * 0.8;
+            const scale = Math.min(targetSize / originalWidth, targetSize / originalHeight);
+
+            // Center sprite
+            const offsetX = (size - (originalWidth * scale)) / 2;
+            const offsetY = (size - (originalHeight * scale)) / 2;
+
+            // Redirect context temporarily
+            const tempCanvas = canvas;
+            const tempCtx = ctx;
+            canvas = exportCanvas;
+            ctx = exportCtx;
+
+            exportCtx.save();
+            exportCtx.translate(offsetX, offsetY);
+            exportCtx.scale(scale, scale);
+
+            drawFunction(0, 0);
+
+            exportCtx.restore();
+
+            // Restore context
+            canvas = tempCanvas;
+            ctx = tempCtx;
+
+            // Trigger download
+            exportCanvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = filename;
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            }, 'image/png');
+        }
+
+
+        // ===== INITIALIZATION =====
+        function init() {
+            canvas = document.getElementById('gameCanvas');
+            ctx = canvas.getContext('2d');
+
+            // Set canvas size
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // Load high score
+            highScore = parseInt(localStorage.getItem('froge69HighScore')) || 0;
+
+            // Input handlers
+            document.addEventListener('keydown', handleKeyDown);
+            canvas.addEventListener('touchstart', handleTouch);
+            canvas.addEventListener('click', handleClick);
+
+            // Detect mobile
+            isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+            // Generate favicons
+            generateFavicons();
+
+            // Start game loop
+            gameLoop();
+        }
+
+        function resizeCanvas() {
+            const scale = Math.min(
+                window.innerWidth / CONFIG.WIDTH,
+                window.innerHeight / CONFIG.HEIGHT
+            );
+
+            canvas.width = CONFIG.WIDTH;
+            canvas.height = CONFIG.HEIGHT;
+            canvas.style.width = (CONFIG.WIDTH * scale) + 'px';
+            canvas.style.height = (CONFIG.HEIGHT * scale) + 'px';
+        }
+
+        // ===== INPUT HANDLING =====
+        function handleKeyDown(e) {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                handleAction();
+            } else if (e.code === 'KeyM') {
+                initAudio();
+                toggleMute();
+            }
+        }
+
+        function handleTouch(e) {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = CONFIG.WIDTH / rect.width;
+            const scaleY = CONFIG.HEIGHT / rect.height;
+            const x = (touch.clientX - rect.left) * scaleX;
+            const y = (touch.clientY - rect.top) * scaleY;
+
+            if (isMuteButtonClick(x, y)) {
+                initAudio();
+                toggleMute();
+                return;
+            }
+            handleAction();
+        }
+
+        function handleClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = CONFIG.WIDTH / rect.width;
+            const scaleY = CONFIG.HEIGHT / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+
+            if (isMuteButtonClick(x, y)) {
+                initAudio();
+                toggleMute();
+                return;
+            }
+            handleAction();
+        }
+
+        function isMuteButtonClick(x, y) {
+            const btnX = CONFIG.WIDTH - 45;
+            const btnY = CONFIG.HEIGHT - 45;
+            const btnSize = 30;
+            const centerX = btnX + btnSize/2;
+            const centerY = btnY + btnSize/2;
+            const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
+            return distance <= btnSize/2 + 5;
+        }
+
+        function handleAction() {
+            // Initialize audio on first user interaction (browser requirement)
+            initAudio();
+
+            if (gameState === GAME_STATE.TITLE) {
+                startZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                jump();
+            } else if (gameState === GAME_STATE.GAME_OVER) {
+                resetGame();
+            }
+        }
+
+        // ===== UTILITY FUNCTIONS =====
+        function easeOutCubic(t) {
+            return 1 - Math.pow(1 - t, 3);
+        }
+
+        // ===== GAME STATE MANAGEMENT =====
+        function startZoomTransition() {
+            gameState = GAME_STATE.ZOOM_TRANSITION;
+            zoomTransition.frame = 0;
+            zoomTransition.scale = 3.0;
+
+            // Initialize ball for throw during zoom (flat, high trajectory)
+            ball.frame = 0;
+            ball.x = 50;
+            ball.y = CONFIG.COOPER_GROUND_Y - 30; // Start high
+            ball.velocityX = 12; // Fast horizontal movement
+            ball.velocityY = -1.5; // Slight upward rise, stays high
+
+            // Initialize background for transition
+            backgroundLayers.far.offset = 0;
+            backgroundLayers.mid.offset = 0;
+            backgroundLayers.near.offset = 0;
+        }
+
+        function startGame() {
+            gameState = GAME_STATE.PLAYING;
+            score = 0;
+            level = 1;
+            gameSpeed = CONFIG.BASE_SPEED;
+            obstacles = [];
+            nextObstacleDistance = 400;
+            groundOffset = 0;
+            frameCount = 0;
+
+            cooper.y = CONFIG.COOPER_GROUND_Y;
+            cooper.velocityY = 0;
+            cooper.isJumping = false;
+
+            // Initialize background layers
+            backgroundLayers.far.offset = 0;
+            backgroundLayers.mid.offset = 0;
+            backgroundLayers.near.offset = 0;
+        }
+
+        function resetGame() {
+            gameState = GAME_STATE.TITLE;
+        }
+
+        function gameOver() {
+            gameState = GAME_STATE.GAME_OVER;
+
+            playGameOverSound();
+
+            // Update high score
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('froge69HighScore', highScore);
+            }
+        }
+
+        // ===== PLAYER ACTIONS =====
+        function jump() {
+            if (!cooper.isJumping) {
+                cooper.velocityY = CONFIG.JUMP_FORCE;
+                cooper.isJumping = true;
+                playJumpSound();
+            }
+        }
+
+        // ===== UPDATE LOGIC =====
+        function update() {
+            if (gameState === GAME_STATE.ZOOM_TRANSITION) {
+                updateZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                updatePlaying();
+            }
+        }
+
+        function updateZoomTransition() {
+            zoomTransition.frame++;
+
+            // Update ball physics (starts at frame 20)
+            if (zoomTransition.frame >= 20) {
+                ball.x += ball.velocityX;
+                ball.y += ball.velocityY;
+                // Minimal gravity - ball stays high and flat
+                ball.velocityY += 0.05;
+            }
+
+            // Check if zoom transition is complete
+            if (zoomTransition.frame >= zoomTransition.maxFrames) {
+                startGame();
+            }
+        }
+
+        function updatePlaying() {
+            frameCount++;
+
+            // Update score
+            score += CONFIG.POINTS_PER_FRAME;
+
+            // Check for level up
+            const newLevel = Math.floor(score / CONFIG.POINTS_PER_LEVEL) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                gameSpeed = CONFIG.BASE_SPEED + (level - 1) * CONFIG.SPEED_INCREASE_PER_LEVEL;
+                levelUpTimer = 60; // Show "LEVEL UP" for 60 frames
+
+                // Dark mode always
+            }
+
+            if (levelUpTimer > 0) levelUpTimer--;
+
+            // Update Cooper
+            updateCooper();
+
+            // Update ground
+            groundOffset = (groundOffset + gameSpeed) % 40;
+
+            // Update parallax background layers
+            backgroundLayers.far.offset = (backgroundLayers.far.offset + gameSpeed * 0.15) % 800;
+            backgroundLayers.mid.offset = (backgroundLayers.mid.offset + gameSpeed * 0.3) % 960;
+            backgroundLayers.near.offset = (backgroundLayers.near.offset + gameSpeed * 0.5) % 1200;
+
+            // Update obstacles
+            updateObstacles();
+
+            // Check collisions
+            checkCollisions();
+        }
+
+        function updateCooper() {
+            // Apply gravity
+            cooper.velocityY += CONFIG.GRAVITY;
+            cooper.y += cooper.velocityY;
+
+            // Ground collision
+            if (cooper.y >= CONFIG.COOPER_GROUND_Y) {
+                cooper.y = CONFIG.COOPER_GROUND_Y;
+                cooper.velocityY = 0;
+                cooper.isJumping = false;
+            }
+
+            // Animation
+            cooper.animTimer++;
+            if (cooper.animTimer > 5) {
+                cooper.animTimer = 0;
+                cooper.prevPrevLegFrame = cooper.prevLegFrame;
+                cooper.prevLegFrame = cooper.animFrame;
+                cooper.animFrame = (cooper.animFrame + 1) % 8;
+            }
+        }
+
+        function updateObstacles() {
+            // Spawn new obstacles
+            nextObstacleDistance -= gameSpeed;
+            if (nextObstacleDistance <= 0) {
+                spawnObstacle();
+                nextObstacleDistance = CONFIG.OBSTACLE_MIN_GAP +
+                    Math.random() * (CONFIG.OBSTACLE_MAX_GAP - CONFIG.OBSTACLE_MIN_GAP);
+            }
+
+            // Move obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= gameSpeed;
+
+                // Remove off-screen obstacles
+                if (obstacles[i].x + obstacles[i].width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        function spawnObstacle() {
+            const type = getObstacleType();
+            const baseY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            switch(type) {
+                case 'money_bag':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 40,
+                        width: 30,
+                        height: 40,
+                        type: 'money_bag'
+                    });
+                    break;
+
+                case 'champagne':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 48,
+                        width: 20,
+                        height: 48,
+                        type: 'champagne'
+                    });
+                    break;
+
+                case 'gold_bar':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 25,
+                        width: 38,
+                        height: 25,
+                        type: 'gold_bar'
+                    });
+                    break;
+
+                case 'shopping_bag':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 42,
+                        width: 30,
+                        height: 42,
+                        type: 'shopping_bag'
+                    });
+                    break;
+
+                case 'coin_stack':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 35,
+                        width: 24,
+                        height: 35,
+                        type: 'coin_stack'
+                    });
+                    break;
+
+                case 'diamond':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 36,
+                        width: 30,
+                        height: 36,
+                        type: 'diamond'
+                    });
+                    break;
+
+                case 'double_gold':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 25,
+                        width: 38,
+                        height: 25,
+                        type: 'gold_bar'
+                    });
+                    obstacles.push({
+                        x: CONFIG.WIDTH + 55,
+                        y: baseY - 25,
+                        width: 38,
+                        height: 25,
+                        type: 'gold_bar'
+                    });
+                    break;
+            }
+        }
+
+        function getObstacleType() {
+            if (level < 3) {
+                return Math.random() < 0.5 ? 'money_bag' : 'gold_bar';
+            } else if (level < 5) {
+                const rand = Math.random();
+                if (rand < 0.25) return 'money_bag';
+                if (rand < 0.50) return 'gold_bar';
+                if (rand < 0.75) return 'champagne';
+                return 'coin_stack';
+            } else if (level < 7) {
+                const rand = Math.random();
+                if (rand < 0.18) return 'money_bag';
+                if (rand < 0.33) return 'gold_bar';
+                if (rand < 0.48) return 'champagne';
+                if (rand < 0.63) return 'coin_stack';
+                if (rand < 0.78) return 'shopping_bag';
+                return 'double_gold';
+            } else {
+                const rand = Math.random();
+                if (rand < 0.14) return 'money_bag';
+                if (rand < 0.28) return 'gold_bar';
+                if (rand < 0.42) return 'champagne';
+                if (rand < 0.56) return 'coin_stack';
+                if (rand < 0.70) return 'shopping_bag';
+                if (rand < 0.85) return 'diamond';
+                return 'double_gold';
+            }
+        }
+
+        function checkCollisions() {
+            const cooperBox = {
+                x: cooper.x + 4,
+                y: cooper.y + 4,
+                width: CONFIG.COOPER_WIDTH - 8,
+                height: CONFIG.COOPER_HEIGHT - 8
+            };
+
+            for (let obstacle of obstacles) {
+                const obstacleBox = {
+                    x: obstacle.x + 2,
+                    y: obstacle.y + 2,
+                    width: obstacle.width - 4,
+                    height: obstacle.height - 4
+                };
+
+                if (boxCollision(cooperBox, obstacleBox)) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
+
+        function boxCollision(box1, box2) {
+            return box1.x < box2.x + box2.width &&
+                   box1.x + box1.width > box2.x &&
+                   box1.y < box2.y + box2.height &&
+                   box1.y + box1.height > box2.y;
+        }
+
+        // ===== RENDERING =====
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Draw background
+            drawBackground();
+
+            if (gameState === GAME_STATE.TITLE) {
+                drawTitle();
+            } else if (gameState === GAME_STATE.ZOOM_TRANSITION) {
+                drawZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                drawPlaying();
+            } else if (gameState === GAME_STATE.GAME_OVER) {
+                drawGameOver();
+            }
+
+            // Always draw mute button (except during zoom transition)
+            if (gameState !== GAME_STATE.ZOOM_TRANSITION) {
+                drawMuteButton();
+            }
+        }
+
+        function drawBackground() {
+            // Rich Town sky gradient (light blue with gold tints)
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, CONFIG.HEIGHT);
+            if (isDayTime) {
+                skyGradient.addColorStop(0, '#87CEEB');
+                skyGradient.addColorStop(0.6, '#B0E0E6');
+                skyGradient.addColorStop(1, '#FFEEBB');
+            } else {
+                skyGradient.addColorStop(0, '#0d1b2a');
+                skyGradient.addColorStop(0.6, '#1b263b');
+                skyGradient.addColorStop(1, '#2a2a3e');
+            }
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Only draw parallax layers if playing or game over
+            if (gameState === GAME_STATE.PLAYING || gameState === GAME_STATE.GAME_OVER) {
+                drawFarLayer();
+                drawMidLayer();
+                drawNearLayer();
+            }
+
+            // Ground
+            drawGround();
+        }
+
+        // ===== RICH TOWN PARALLAX LAYERS =====
+
+        function drawFarLayer() {
+            // Floating dollar signs and coins in the sky
+            const floatPattern = [
+                { x: 80, y: 50, type: 'dollar' },
+                { x: 220, y: 70, type: 'coin' },
+                { x: 380, y: 40, type: 'dollar' },
+                { x: 520, y: 65, type: 'coin' },
+                { x: 680, y: 45, type: 'dollar' },
+            ];
+
+            for (let offsetX = -backgroundLayers.far.offset; offsetX < CONFIG.WIDTH + 200; offsetX += 800) {
+                for (let item of floatPattern) {
+                    const x = offsetX + item.x;
+                    const bob = Math.sin(frameCount * 0.03 + item.x * 0.01) * 8;
+                    if (x > -30 && x < CONFIG.WIDTH + 30) {
+                        if (item.type === 'dollar') {
+                            // Floating dollar sign
+                            ctx.fillStyle = isDayTime ? 'rgba(0, 128, 0, 0.3)' : 'rgba(0, 200, 0, 0.2)';
+                            ctx.font = 'bold 24px Courier New';
+                            ctx.textAlign = 'center';
+                            ctx.fillText('$', x, item.y + bob);
+                        } else {
+                            // Gold coin
+                            ctx.fillStyle = isDayTime ? 'rgba(255, 215, 0, 0.4)' : 'rgba(255, 215, 0, 0.25)';
+                            ctx.beginPath();
+                            ctx.arc(x, item.y + bob, 8, 0, Math.PI * 2);
+                            ctx.fill();
+                            ctx.fillStyle = isDayTime ? 'rgba(218, 165, 32, 0.5)' : 'rgba(218, 165, 32, 0.3)';
+                            ctx.beginPath();
+                            ctx.arc(x, item.y + bob, 5, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawMidLayer() {
+            // Mansions and fancy buildings
+            const mansionColors = isDayTime ? {
+                wall: '#FFF8E7',
+                wallAlt: '#FFE4C4',
+                wallPink: '#FFE4E1',
+                roof: '#8B0000',
+                roofAlt: '#2F4F4F',
+                window: '#A8D8EA',
+                trim: '#DAA520',
+                fence: '#DAA520'
+            } : {
+                wall: '#3a3a4e',
+                wallAlt: '#4a3a3e',
+                wallPink: '#4a3a4e',
+                roof: '#4a1a1a',
+                roofAlt: '#1a2a2a',
+                window: '#FFD700',
+                trim: '#8B6914',
+                fence: '#6B5300'
+            };
+
+            const mansionPattern = [
+                { type: 'mansion', w: 100, h: 180, color: 'wall', roofColor: 'roof' },
+                { type: 'fence', w: 60, h: 60 },
+                { type: 'mansion', w: 80, h: 150, color: 'wallAlt', roofColor: 'roofAlt' },
+                { type: 'fountain', w: 50, h: 80 },
+                { type: 'mansion', w: 110, h: 200, color: 'wallPink', roofColor: 'roof' },
+                { type: 'hedge', w: 40, h: 50 },
+                { type: 'mansion', w: 90, h: 170, color: 'wall', roofColor: 'roofAlt' },
+                { type: 'fence', w: 60, h: 60 },
+            ];
+
+            const groundY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+            let elementIndex = 0;
+
+            for (let offsetX = -backgroundLayers.mid.offset; offsetX < CONFIG.WIDTH + 200; offsetX += 120) {
+                const element = mansionPattern[elementIndex % mansionPattern.length];
+                elementIndex++;
+                const x = offsetX;
+
+                if (x > -150 && x < CONFIG.WIDTH + 50) {
+                    if (element.type === 'mansion') {
+                        const y = groundY - element.h;
+
+                        // Mansion wall
+                        ctx.fillStyle = mansionColors[element.color];
+                        ctx.fillRect(x, y, element.w, element.h);
+
+                        // Roof (triangle)
+                        ctx.fillStyle = mansionColors[element.roofColor];
+                        ctx.beginPath();
+                        ctx.moveTo(x - 5, y);
+                        ctx.lineTo(x + element.w / 2, y - 30);
+                        ctx.lineTo(x + element.w + 5, y);
+                        ctx.fill();
+
+                        // Gold trim
+                        ctx.fillStyle = mansionColors.trim;
+                        ctx.fillRect(x - 5, y - 3, element.w + 10, 6);
+
+                        // Windows (fancy arched)
+                        ctx.fillStyle = mansionColors.window;
+                        for (let wy = y + 25; wy < y + element.h - 15; wy += 30) {
+                            for (let wx = x + 12; wx < x + element.w - 15; wx += 22) {
+                                ctx.fillRect(wx, wy, 10, 16);
+                                // Arch top
+                                ctx.beginPath();
+                                ctx.arc(wx + 5, wy, 5, Math.PI, 0);
+                                ctx.fill();
+
+                                if (!isDayTime) {
+                                    ctx.fillStyle = 'rgba(255, 215, 0, 0.25)';
+                                    ctx.fillRect(wx - 2, wy - 2, 14, 20);
+                                    ctx.fillStyle = mansionColors.window;
+                                }
+                            }
+                        }
+
+                        // Door
+                        ctx.fillStyle = isDayTime ? '#654321' : '#3a2a1a';
+                        ctx.fillRect(x + element.w / 2 - 8, groundY - 30, 16, 30);
+                        ctx.fillStyle = mansionColors.trim;
+                        ctx.fillRect(x + element.w / 2 - 10, groundY - 32, 20, 4);
+
+                    } else if (element.type === 'fence') {
+                        // Gold fence
+                        ctx.fillStyle = mansionColors.fence;
+                        for (let fx = x; fx < x + element.w; fx += 12) {
+                            ctx.fillRect(fx + 4, groundY - 50, 4, 50);
+                            // Spear tip
+                            ctx.beginPath();
+                            ctx.moveTo(fx + 3, groundY - 50);
+                            ctx.lineTo(fx + 6, groundY - 58);
+                            ctx.lineTo(fx + 9, groundY - 50);
+                            ctx.fill();
+                        }
+                        // Horizontal bars
+                        ctx.fillRect(x, groundY - 40, element.w, 3);
+                        ctx.fillRect(x, groundY - 20, element.w, 3);
+
+                    } else if (element.type === 'fountain') {
+                        // Fountain base
+                        ctx.fillStyle = isDayTime ? '#D3D3D3' : '#4a4a4a';
+                        ctx.fillRect(x + 5, groundY - 25, 40, 25);
+                        ctx.fillRect(x + 15, groundY - 45, 20, 20);
+                        // Water
+                        ctx.fillStyle = isDayTime ? 'rgba(100, 180, 255, 0.6)' : 'rgba(50, 100, 180, 0.4)';
+                        ctx.beginPath();
+                        ctx.arc(x + 25, groundY - 45, 12, Math.PI, 0);
+                        ctx.fill();
+
+                    } else if (element.type === 'hedge') {
+                        // Trimmed hedge
+                        ctx.fillStyle = isDayTime ? '#2D5016' : '#1a3010';
+                        ctx.fillRect(x + 2, groundY - 40, 36, 40);
+                        ctx.fillRect(x + 8, groundY - 50, 24, 12);
+                    }
+                }
+            }
+        }
+
+        function drawNearLayer() {
+            // Luxury cars and decorative elements (closer, faster parallax)
+            const nearPattern = [
+                { type: 'lambo', x: 200 },
+                { type: 'lambo', x: 600 },
+                { type: 'lambo', x: 1000 },
+            ];
+
+            const groundY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            for (let offsetX = -backgroundLayers.near.offset; offsetX < CONFIG.WIDTH + 200; offsetX += 1200) {
+                for (let item of nearPattern) {
+                    const x = offsetX + item.x;
+                    if (x > -80 && x < CONFIG.WIDTH + 80) {
+                        // Luxury car (simple pixel art lambo)
+                        const carY = groundY - 18;
+                        const colors = [
+                            { body: '#FF4444', dark: '#CC0000' },
+                            { body: '#FFD700', dark: '#DAA520' },
+                            { body: '#4444FF', dark: '#0000CC' },
+                        ];
+                        const carColor = colors[Math.abs(Math.floor(item.x / 200)) % 3];
+
+                        // Car body (low, sleek)
+                        ctx.fillStyle = carColor.body;
+                        ctx.fillRect(x, carY, 50, 12);
+                        ctx.fillRect(x + 8, carY - 8, 30, 10);
+
+                        // Dark accent
+                        ctx.fillStyle = carColor.dark;
+                        ctx.fillRect(x, carY + 10, 50, 2);
+
+                        // Windshield
+                        ctx.fillStyle = isDayTime ? '#A8D8EA' : '#4A6A8A';
+                        ctx.fillRect(x + 30, carY - 6, 8, 8);
+
+                        // Wheels
+                        ctx.fillStyle = '#1a1a1a';
+                        ctx.beginPath();
+                        ctx.arc(x + 12, carY + 12, 5, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(x + 40, carY + 12, 5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Wheel rims (gold)
+                        ctx.fillStyle = '#DAA520';
+                        ctx.beginPath();
+                        ctx.arc(x + 12, carY + 12, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.arc(x + 40, carY + 12, 2, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        function drawGround() {
+            const groundY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            // Ground edge line
+            ctx.strokeStyle = isDayTime ? '#B8860B' : '#5a4a0a';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(CONFIG.WIDTH, groundY);
+            ctx.stroke();
+
+            // Gold brick road
+            const brickColor1 = isDayTime ? '#DAA520' : '#6B5200';
+            const brickColor2 = isDayTime ? '#FFD700' : '#8B7400';
+            const mortarColor = isDayTime ? '#B8860B' : '#4a3a00';
+
+            ctx.fillStyle = brickColor1;
+            ctx.fillRect(0, groundY, CONFIG.WIDTH, CONFIG.HEIGHT - groundY);
+
+            // Brick pattern (scrolling)
+            for (let row = 0; row < (CONFIG.HEIGHT - groundY); row += 12) {
+                const offsetBrick = (Math.floor(row / 12) % 2) * 15;
+                for (let col = -groundOffset + offsetBrick; col < CONFIG.WIDTH + 30; col += 30) {
+                    // Alternating gold bricks
+                    const hash = (Math.floor(col / 30) + Math.floor(row / 12)) % 3;
+                    ctx.fillStyle = hash === 0 ? brickColor2 : brickColor1;
+                    ctx.fillRect(col + 1, groundY + row + 1, 28, 10);
+                }
+            }
+
+            // Mortar lines (horizontal)
+            ctx.strokeStyle = mortarColor;
+            ctx.lineWidth = 1;
+            for (let y = groundY + 12; y < CONFIG.HEIGHT; y += 12) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(CONFIG.WIDTH, y);
+                ctx.stroke();
+            }
+        }
+
+
+        function drawTitle() {
+            // === DARK BACKGROUND ===
+            const bgGradient = ctx.createLinearGradient(0, 0, 0, CONFIG.HEIGHT);
+            bgGradient.addColorStop(0, '#0d1b2a');
+            bgGradient.addColorStop(0.7, '#1b263b');
+            bgGradient.addColorStop(1, '#2a2a3e');
+            ctx.fillStyle = bgGradient;
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Dark gold ground
+            const groundY = CONFIG.HEIGHT - 80;
+            ctx.fillStyle = '#3a2a00';
+            ctx.fillRect(0, groundY, CONFIG.WIDTH, 80);
+            ctx.fillStyle = '#5a4a10';
+            ctx.fillRect(0, groundY, CONFIG.WIDTH, 3);
+
+            // Muted mansion silhouettes
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.07)';
+            ctx.fillRect(40, groundY - 100, 80, 100);
+            ctx.fillRect(150, groundY - 70, 60, 70);
+            ctx.fillRect(550, groundY - 110, 90, 110);
+            ctx.fillRect(670, groundY - 80, 70, 80);
+            // A few dim gold windows
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.15)';
+            ctx.fillRect(60, groundY - 70, 8, 10);
+            ctx.fillRect(80, groundY - 70, 8, 10);
+            ctx.fillRect(60, groundY - 45, 8, 10);
+            ctx.fillRect(570, groundY - 80, 8, 10);
+            ctx.fillRect(590, groundY - 80, 8, 10);
+            ctx.fillRect(690, groundY - 55, 8, 10);
+
+            // Draw froge.jpg image on title screen (pixelated)
+            if (frogeImgLoaded) {
+                const imgSize = 120;
+                const pepeX = CONFIG.WIDTH / 2 - imgSize / 2;
+                const pepeY = CONFIG.HEIGHT / 2 - 130;
+                ctx.save();
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(frogeImg, pepeX, pepeY, imgSize, imgSize);
+                ctx.restore();
+            }
+
+            // === TITLE TEXT ===
+            ctx.font = 'bold 55px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#FFD700';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 5;
+            ctx.strokeText('FROGE69', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 70);
+            ctx.fillText('FROGE69', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 70);
+
+            // Subtitle
+            ctx.font = 'bold 14px Courier New';
+            ctx.fillStyle = '#DAA520';
+            ctx.fillText('FROGE69 RUNNER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+
+            // Instruction text
+            ctx.font = 'bold 16px Courier New';
+            ctx.fillStyle = '#CCCCCC';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            const instructionText = isMobile ? 'TAP TO FLEX' : 'PRESS SPACE TO FLEX';
+            ctx.strokeText(instructionText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 130);
+            ctx.fillText(instructionText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 130);
+
+            // High score
+            if (highScore > 0) {
+                ctx.font = 'bold 13px Courier New';
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.strokeText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 160);
+                ctx.fillText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 160);
+            }
+
+            // === "HOW TO PLAY" CARD (dark themed) ===
+            const cardX = CONFIG.WIDTH - 170;
+            const cardY = CONFIG.HEIGHT / 2 - 70;
+            const cardW = 155;
+            const cardH = 140;
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.fillRect(cardX + 3, cardY + 3, cardW, cardH);
+
+            // Dark card background
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = '#DAA520';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = 'rgba(255, 215, 0, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(cardX + 6, cardY + 6, cardW - 12, cardH - 12);
+
+            ctx.fillStyle = '#FFD700';
+            ctx.textAlign = 'center';
+
+            ctx.font = 'bold 12px Courier New';
+            ctx.fillText('HOW TO PLAY', cardX + cardW / 2, cardY + 22);
+
+            // Divider
+            ctx.strokeStyle = '#DAA520';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cardX + 15, cardY + 30);
+            ctx.lineTo(cardX + cardW - 15, cardY + 30);
+            ctx.stroke();
+
+            ctx.font = '9px Courier New';
+            ctx.textAlign = 'left';
+            ctx.fillStyle = '#CCCCCC';
+            ctx.fillText('PC: [SPACE] to Jump', cardX + 15, cardY + 50);
+            ctx.fillText('Mobile: TAP to Jump', cardX + 15, cardY + 70);
+
+            ctx.font = 'bold 9px Courier New';
+            ctx.fillStyle = '#FF6B6B';
+            ctx.textAlign = 'center';
+            ctx.fillText('Dodge the bling!', cardX + cardW / 2, cardY + 95);
+
+            ctx.fillStyle = '#999999';
+            ctx.font = '8px Courier New';
+            ctx.fillText('Level up every', cardX + cardW / 2, cardY + 115);
+            ctx.fillText('500 points', cardX + cardW / 2, cardY + 127);
+        }
+
+        function drawZoomTransition() {
+            // Calculate zoom progress with easing
+            const progress = zoomTransition.frame / zoomTransition.maxFrames;
+            const easedProgress = easeOutCubic(progress);
+            const currentScale = zoomTransition.scale - ((zoomTransition.scale - zoomTransition.targetScale) * easedProgress);
+
+            // Draw full scene with zoom
+            ctx.save();
+            ctx.translate(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2);
+            ctx.scale(currentScale, currentScale);
+            ctx.translate(-CONFIG.WIDTH / 2, -CONFIG.HEIGHT / 2);
+
+            // Draw background layers
+            drawFarLayer();
+            drawMidLayer();
+            drawNearLayer();
+            drawGround();
+
+            // Draw Pepe
+            drawCooper(CONFIG.COOPER_X, CONFIG.COOPER_GROUND_Y, 0);
+
+            // Draw gold coin (starts appearing at frame 20)
+            if (zoomTransition.frame >= 20) {
+                // Flying gold coin
+                ctx.fillStyle = '#FFD700';
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, CONFIG.BALL_SIZE / 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#DAA520';
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, CONFIG.BALL_SIZE / 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#FFD700';
+                ctx.font = 'bold 8px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText('$', ball.x, ball.y + 3);
+            }
+
+            ctx.restore();
+        }
+
+        function drawPlaying() {
+            // Draw ground (already drawn in background)
+
+            // Draw obstacles
+            for (let obstacle of obstacles) {
+                drawObstacle(obstacle);
+            }
+
+            // Draw Pepe
+            drawCooper(cooper.x, cooper.y, cooper.animFrame);
+
+            // Draw UI
+            drawUI();
+
+            // Draw level up notification
+            if (levelUpTimer > 0) {
+                const alpha = levelUpTimer / 60;
+                const scale = 1 + (1 - alpha) * 0.3; // Slight zoom in effect
+
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2);
+                ctx.scale(scale, scale);
+
+                // Glow effect
+                ctx.shadowColor = '#FFD700';
+                ctx.shadowBlur = 20;
+
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 5;
+                ctx.font = 'bold 43px Courier New';
+                ctx.textAlign = 'center';
+                ctx.strokeText('LEVEL UP!', 0, 0);
+                ctx.fillText('LEVEL UP!', 0, 0);
+
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            }
+        }
+
+        function drawGameOver() {
+            // Draw static game scene
+            for (let obstacle of obstacles) {
+                drawObstacle(obstacle);
+            }
+            drawCooper(cooper.x, cooper.y, 0);
+
+            // Game over overlay (darker)
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Game over box background
+            ctx.fillStyle = 'rgba(26, 26, 46, 0.9)';
+            ctx.fillRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+
+            // Game over text
+            ctx.fillStyle = '#FF4444';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 5;
+            ctx.font = 'bold 50px Courier New';
+            ctx.textAlign = 'center';
+            ctx.strokeText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
+            ctx.fillText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
+
+            // Score
+            ctx.fillStyle = 'white';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 29px Courier New';
+            ctx.strokeText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
+            ctx.fillText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
+
+            // High score
+            ctx.font = 'bold 22px Courier New';
+            ctx.fillStyle = '#FFD700';
+            ctx.strokeText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
+            ctx.fillText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
+
+            // New high score message
+            if (score === highScore && score > 0) {
+                ctx.font = 'bold 14px Courier New';
+                ctx.fillStyle = '#FFD700';
+                ctx.fillText('NEW HIGH SCORE!', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 55);
+            }
+
+            // Play again
+            ctx.font = 'bold 16px Courier New';
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            const playAgainText = isMobile ? 'TAP TO PLAY AGAIN' : 'PRESS SPACE TO PLAY AGAIN';
+            ctx.strokeText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+            ctx.fillText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+        }
+
+        function drawUI() {
+            ctx.textAlign = 'left';
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 22px Courier New';
+
+            // Level
+            ctx.strokeText(`LEVEL ${level}`, 20, 35);
+            ctx.fillText(`LEVEL ${level}`, 20, 35);
+
+            // Score (top right)
+            ctx.textAlign = 'right';
+            ctx.strokeText(`${score}`, CONFIG.WIDTH - 20, 35);
+            ctx.fillText(`${score}`, CONFIG.WIDTH - 20, 35);
+
+            // High score (below score)
+            ctx.font = 'bold 14px Courier New';
+            ctx.strokeText(`HI: ${highScore}`, CONFIG.WIDTH - 20, 60);
+            ctx.fillText(`HI: ${highScore}`, CONFIG.WIDTH - 20, 60);
+
+            // Draw mute button
+            drawMuteButton();
+        }
+
+        function drawMuteButton() {
+            const btnX = CONFIG.WIDTH - 45;
+            const btnY = CONFIG.HEIGHT - 45;
+            const btnSize = 30;
+
+            // Button background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            ctx.beginPath();
+            ctx.arc(btnX + btnSize/2, btnY + btnSize/2, btnSize/2 + 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Speaker icon
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.moveTo(btnX + 8, btnY + 12);
+            ctx.lineTo(btnX + 14, btnY + 12);
+            ctx.lineTo(btnX + 20, btnY + 6);
+            ctx.lineTo(btnX + 20, btnY + 24);
+            ctx.lineTo(btnX + 14, btnY + 18);
+            ctx.lineTo(btnX + 8, btnY + 18);
+            ctx.closePath();
+            ctx.fill();
+
+            if (isMuted) {
+                // Draw X over speaker
+                ctx.strokeStyle = '#FF6B6B';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(btnX + 4, btnY + 4);
+                ctx.lineTo(btnX + 26, btnY + 26);
+                ctx.stroke();
+            } else {
+                // Draw sound waves
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(btnX + 20, btnY + 15, 5, -Math.PI/3, Math.PI/3);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(btnX + 20, btnY + 15, 9, -Math.PI/3, Math.PI/3);
+                ctx.stroke();
+            }
+        }
+
+        // ===== SPRITE DRAWING =====
+
+        function drawCooper(x, y, frame) {
+            // Motion lines
+            if (gameState === GAME_STATE.PLAYING && frame % 2 === 0) {
+                ctx.strokeStyle = 'rgba(232, 146, 58, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(x - 2, y + 15);
+                ctx.lineTo(x - 5, y + 15);
+                ctx.moveTo(x - 2, y + 24);
+                ctx.lineTo(x - 5, y + 24);
+                ctx.stroke();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                ctx.strokeStyle = 'rgba(232, 146, 58, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(x - 2, y + 18);
+                ctx.lineTo(x - 5, y + 18);
+                ctx.moveTo(x - 2, y + 27);
+                ctx.lineTo(x - 5, y + 27);
+                ctx.stroke();
+            }
+
+            // === GREEN BEANIE ===
+            ctx.fillStyle = '#4A7A3D';
+            ctx.fillRect(x + 18, y + 1, 24, 8);
+            ctx.fillRect(x + 20, y - 1, 20, 3);
+            ctx.fillStyle = '#3A6A2D';
+            ctx.fillRect(x + 18, y + 3, 24, 1);
+            ctx.fillRect(x + 18, y + 6, 24, 1);
+            ctx.fillStyle = '#C0C0C0';
+            ctx.fillRect(x + 29, y - 2, 3, 2);
+
+            // === HEAD (side view, orange frog) ===
+            ctx.fillStyle = '#E8923A';
+            ctx.fillRect(x + 16, y + 8, 28, 18);
+            ctx.fillRect(x + 42, y + 12, 4, 10);
+
+            // === WHITE FACE/MOUTH AREA ===
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(x + 26, y + 14, 20, 10);
+
+            // === RED LIPS (wide Pepe smile) ===
+            ctx.fillStyle = '#CC2222';
+            ctx.fillRect(x + 26, y + 20, 20, 4);
+            ctx.fillRect(x + 42, y + 18, 4, 4);
+            ctx.fillStyle = '#EE4444';
+            ctx.fillRect(x + 26, y + 20, 20, 1);
+            ctx.fillStyle = '#880000';
+            ctx.fillRect(x + 30, y + 21, 12, 2);
+
+            // === EYE (half-lidded Pepe, side view) ===
+            ctx.fillStyle = '#3366CC';
+            ctx.fillRect(x + 30, y + 10, 8, 5);
+            ctx.fillStyle = '#DDAA22';
+            ctx.fillRect(x + 36, y + 10, 4, 3);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x + 31, y + 12, 6, 4);
+            ctx.fillStyle = 'black';
+            ctx.fillRect(x + 35, y + 13, 3, 3);
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x + 36, y + 13, 1, 1);
+            ctx.fillStyle = '#E8923A';
+            ctx.fillRect(x + 30, y + 10, 8, 3);
+            ctx.fillStyle = '#D0822A';
+            ctx.fillRect(x + 30, y + 12, 8, 1);
+
+            // === CLOWN NOSE ===
+            ctx.fillStyle = '#FF6B8A';
+            ctx.fillRect(x + 40, y + 15, 4, 4);
+            ctx.fillStyle = '#FF8FA8';
+            ctx.fillRect(x + 41, y + 15, 2, 1);
+
+            // === BODY (blue jacket) ===
+            ctx.fillStyle = '#5B8DAE';
+            ctx.fillRect(x + 6, y + 24, 30, 14);
+            ctx.fillStyle = '#4A7D9E';
+            ctx.fillRect(x + 6, y + 24, 4, 14);
+            ctx.fillStyle = '#6B9DBE';
+            ctx.fillRect(x + 32, y + 24, 4, 14);
+
+            // Jacket collar
+            ctx.fillStyle = '#DDDDDD';
+            ctx.fillRect(x + 18, y + 24, 14, 3);
+
+            // Striped undershirt
+            ctx.fillStyle = '#CCCCCC';
+            ctx.fillRect(x + 20, y + 27, 10, 6);
+            ctx.fillStyle = '#999999';
+            ctx.fillRect(x + 20, y + 29, 10, 1);
+            ctx.fillRect(x + 20, y + 31, 10, 1);
+
+            // Gold chain
+            ctx.fillStyle = '#DAA520';
+            ctx.fillRect(x + 12, y + 28, 10, 2);
+            ctx.fillRect(x + 10, y + 30, 3, 5);
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(x + 12, y + 28, 10, 1);
+
+            // Arm (jacket sleeve)
+            ctx.fillStyle = '#5B8DAE';
+            ctx.fillRect(x + 30, y + 28, 5, 8);
+            ctx.fillStyle = '#E8923A';
+            ctx.fillRect(x + 30, y + 35, 5, 3);
+
+            // Draw leg motion blur
+            if (gameState === GAME_STATE.PLAYING && frame % 2 === 1) {
+                if (cooper.prevLegFrame >= 0) {
+                    ctx.save();
+                    ctx.globalAlpha = 0.4;
+                    drawLegs(x, y, cooper.prevLegFrame);
+                    ctx.restore();
+                }
+                if (cooper.prevPrevLegFrame >= 0) {
+                    ctx.save();
+                    ctx.globalAlpha = 0.2;
+                    drawLegs(x, y, cooper.prevPrevLegFrame);
+                    ctx.restore();
+                }
+            }
+
+            // Draw current legs
+            drawLegs(x, y, frame);
+        }
+
+        // Helper function to draw legs based on animation frame
+        function drawLegs(x, y, frame) {
+            // 8-frame frog leg cycle
+            const legCycle = [
+                { front: { x: 27, y: 36, h: 11 }, back: { x: 13, y: 36, h: 11 } },
+                { front: { x: 29, y: 34, h: 13 }, back: { x: 13, y: 38, h: 9 } },
+                { front: { x: 31, y: 32, h: 14 }, back: { x: 13, y: 40, h: 7 } },
+                { front: { x: 29, y: 34, h: 13 }, back: { x: 14, y: 38, h: 9 } },
+                { front: { x: 27, y: 36, h: 11 }, back: { x: 16, y: 36, h: 11 } },
+                { front: { x: 27, y: 38, h: 9 },  back: { x: 18, y: 34, h: 13 } },
+                { front: { x: 27, y: 40, h: 7 },  back: { x: 20, y: 32, h: 14 } },
+                { front: { x: 27, y: 38, h: 9 },  back: { x: 16, y: 34, h: 13 } }
+            ];
+
+            const leg = legCycle[frame % 8];
+
+            // Front leg (orange frog skin, wider)
+            ctx.fillStyle = '#E8923A';
+            ctx.fillRect(x + leg.front.x, y + leg.front.y, 6, leg.front.h);
+            // Webbed foot
+            ctx.fillStyle = '#D0822A';
+            ctx.fillRect(x + leg.front.x - 1, y + leg.front.y + leg.front.h - 2, 9, 2);
+
+            // Back leg
+            ctx.fillStyle = '#E8923A';
+            ctx.fillRect(x + leg.back.x, y + leg.back.y, 6, leg.back.h);
+            // Webbed foot
+            ctx.fillStyle = '#D0822A';
+            ctx.fillRect(x + leg.back.x - 1, y + leg.back.y + leg.back.h - 2, 9, 2);
+        }
+
+        // ===== RICH TOWN OBSTACLE DRAWING =====
+
+        function drawMoneyBag(x, y) {
+            // Bag body (brown/tan)
+            ctx.fillStyle = '#C4A35A';
+            ctx.fillRect(x + 3, y + 12, 24, 28);
+            // Bag top (tied)
+            ctx.fillStyle = '#B8963E';
+            ctx.fillRect(x + 8, y + 4, 14, 10);
+            ctx.fillRect(x + 11, y + 0, 8, 6);
+            // Tie
+            ctx.fillStyle = '#8B6914';
+            ctx.fillRect(x + 10, y + 10, 10, 3);
+            // Dollar sign
+            ctx.fillStyle = '#2a6a2a';
+            ctx.font = 'bold 16px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('$', x + 15, y + 32);
+            // Bag highlight
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            ctx.fillRect(x + 5, y + 14, 6, 20);
+        }
+
+        function drawChampagne(x, y) {
+            // Bottle body (dark green)
+            ctx.fillStyle = '#2F4F2F';
+            ctx.fillRect(x + 5, y + 15, 10, 33);
+            // Bottle neck
+            ctx.fillStyle = '#3A5A3A';
+            ctx.fillRect(x + 7, y + 5, 6, 12);
+            // Gold foil top
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(x + 6, y + 0, 8, 7);
+            // Cork
+            ctx.fillStyle = '#DAA520';
+            ctx.fillRect(x + 8, y - 2, 4, 3);
+            // Label
+            ctx.fillStyle = '#FFFFF0';
+            ctx.fillRect(x + 6, y + 22, 8, 12);
+            // Highlight
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.fillRect(x + 6, y + 15, 3, 30);
+        }
+
+        function drawGoldBar(x, y) {
+            // Gold bar (trapezoid shape using rects)
+            // Bottom
+            ctx.fillStyle = '#DAA520';
+            ctx.fillRect(x + 2, y + 10, 34, 15);
+            // Top (smaller)
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(x + 6, y + 2, 26, 10);
+            // Highlight
+            ctx.fillStyle = '#FFEC8B';
+            ctx.fillRect(x + 8, y + 3, 22, 3);
+            // Shadow
+            ctx.fillStyle = '#B8860B';
+            ctx.fillRect(x + 2, y + 22, 34, 3);
+            // Stamp
+            ctx.fillStyle = '#B8860B';
+            ctx.font = 'bold 7px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('999', x + 19, y + 20);
+        }
+
+        function drawShoppingBag(x, y) {
+            // Bag body (pink/magenta)
+            ctx.fillStyle = '#FF69B4';
+            ctx.fillRect(x + 3, y + 10, 24, 32);
+            // Bag top
+            ctx.fillStyle = '#FF85C8';
+            ctx.fillRect(x + 3, y + 10, 24, 4);
+            // Handle
+            ctx.strokeStyle = '#CC5599';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x + 15, y + 8, 6, Math.PI, 0);
+            ctx.stroke();
+            // Tissue paper peeking out
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(x + 8, y + 4, 5, 8);
+            ctx.fillRect(x + 16, y + 6, 4, 6);
+            // Logo/star
+            ctx.fillStyle = '#FFFFFF';
+            ctx.font = 'bold 10px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('*', x + 15, y + 30);
+        }
+
+        function drawCoinStack(x, y) {
+            // Stacked gold coins
+            const coinColors = ['#DAA520', '#FFD700', '#DAA520', '#FFD700', '#DAA520'];
+            for (let i = 0; i < 5; i++) {
+                const cy = y + 28 - i * 7;
+                // Coin edge
+                ctx.fillStyle = '#B8860B';
+                ctx.fillRect(x + 2, cy, 20, 7);
+                // Coin face
+                ctx.fillStyle = coinColors[i];
+                ctx.fillRect(x + 2, cy, 20, 5);
+                // Highlight
+                ctx.fillStyle = '#FFEC8B';
+                ctx.fillRect(x + 4, cy + 1, 16, 1);
+            }
+        }
+
+        function drawDiamond(x, y) {
+            // Diamond shape (pixel art)
+            ctx.fillStyle = '#B9F2FF';
+            // Top triangle
+            ctx.beginPath();
+            ctx.moveTo(x + 15, y + 0);
+            ctx.lineTo(x + 28, y + 14);
+            ctx.lineTo(x + 2, y + 14);
+            ctx.fill();
+            // Bottom triangle
+            ctx.beginPath();
+            ctx.moveTo(x + 2, y + 14);
+            ctx.lineTo(x + 28, y + 14);
+            ctx.lineTo(x + 15, y + 36);
+            ctx.fill();
+            // Facet lines
+            ctx.strokeStyle = '#87CEEB';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 8, y + 14);
+            ctx.lineTo(x + 15, y + 0);
+            ctx.lineTo(x + 22, y + 14);
+            ctx.moveTo(x + 8, y + 14);
+            ctx.lineTo(x + 15, y + 36);
+            ctx.lineTo(x + 22, y + 14);
+            ctx.stroke();
+            // Sparkle highlight
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.fillRect(x + 10, y + 6, 4, 4);
+        }
+
+        // Unified obstacle drawing function
+        function drawObstacle(obstacle) {
+            switch(obstacle.type) {
+                case 'money_bag':
+                    drawMoneyBag(obstacle.x, obstacle.y);
+                    break;
+                case 'champagne':
+                    drawChampagne(obstacle.x, obstacle.y);
+                    break;
+                case 'gold_bar':
+                    drawGoldBar(obstacle.x, obstacle.y);
+                    break;
+                case 'shopping_bag':
+                    drawShoppingBag(obstacle.x, obstacle.y);
+                    break;
+                case 'coin_stack':
+                    drawCoinStack(obstacle.x, obstacle.y);
+                    break;
+                case 'diamond':
+                    drawDiamond(obstacle.x, obstacle.y);
+                    break;
+            }
+        }
+
+        // ===== GAME LOOP =====
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ===== START GAME =====
+        init();
+    </script>
+</body>
+</html>

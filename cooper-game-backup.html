@@ -1,0 +1,1745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cooper - Endless Runner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a2e;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+
+        #gameContainer {
+            position: relative;
+            max-width: 100vw;
+            max-height: 100vh;
+        }
+
+        #gameCanvas {
+            display: block;
+            background: #87CEEB;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .screen-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            text-shadow: 4px 4px 0 rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            font-size: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .screen-text {
+                font-size: 18px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // ===== GAME CONFIGURATION =====
+        const CONFIG = {
+            // Canvas
+            WIDTH: 800,
+            HEIGHT: 400,
+
+            // Physics
+            GRAVITY: 0.8,
+            JUMP_FORCE: -15,
+
+            // Cooper
+            COOPER_X: 100,
+            COOPER_WIDTH: 50,
+            COOPER_HEIGHT: 50,
+            COOPER_GROUND_Y: 302,
+
+            // Game Speed
+            BASE_SPEED: 6,
+            SPEED_INCREASE_PER_LEVEL: 0.6,
+
+            // Obstacles
+            OBSTACLE_MIN_GAP: 400,
+            OBSTACLE_MAX_GAP: 700,
+            OBSTACLE_WIDTH: 24,
+
+            // Scoring
+            POINTS_PER_FRAME: 1,
+            POINTS_PER_LEVEL: 500,
+
+            // Ball Animation
+            BALL_DURATION: 90, // frames (1.5 seconds at 60fps)
+            BALL_SIZE: 14
+        };
+
+        // ===== GAME STATE =====
+        const GAME_STATE = {
+            TITLE: 'title',
+            ZOOM_TRANSITION: 'zoom_transition',
+            PLAYING: 'playing',
+            GAME_OVER: 'game_over'
+        };
+
+        // ===== GAME VARIABLES =====
+        let canvas, ctx;
+        let gameState = GAME_STATE.TITLE;
+        let score = 0;
+        let highScore = 0;
+        let level = 1;
+        let gameSpeed = CONFIG.BASE_SPEED;
+        let frameCount = 0;
+
+        // Cooper
+        let cooper = {
+            x: CONFIG.COOPER_X,
+            y: CONFIG.COOPER_GROUND_Y,
+            velocityY: 0,
+            isJumping: false,
+            animFrame: 0,
+            animTimer: 0,
+            prevLegFrame: -1,
+            prevPrevLegFrame: -1
+        };
+
+        // Ball
+        let ball = {
+            x: 50,
+            y: CONFIG.COOPER_GROUND_Y + 10,
+            velocityX: 0,
+            velocityY: 0,
+            frame: 0
+        };
+
+        // Obstacles
+        let obstacles = [];
+        let nextObstacleDistance = 0;
+
+        // Ground
+        let groundOffset = 0;
+
+        // Parallax background
+        let backgroundLayers = {
+            clouds: { offset: 0, speed: 0.2 },
+            buildings: { offset: 0, speed: 0.5 },
+            airplanes: []
+        };
+
+        // Zoom transition
+        let zoomTransition = {
+            frame: 0,
+            maxFrames: 90,
+            scale: 3.0,
+            targetScale: 1.0
+        };
+
+        // Visual
+        let levelUpTimer = 0;
+        let isDayTime = true;
+
+        // Mobile
+        let isMobile = false;
+
+        // ===== COOPER BANNER EXPORT =====
+        function exportCooperBanner() {
+            // Create offscreen canvas at 1500x500
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = 1500;
+            exportCanvas.height = 500;
+            const exportCtx = exportCanvas.getContext('2d');
+
+            // Enable nearest-neighbor scaling for crisp pixel art
+            exportCtx.imageSmoothingEnabled = false;
+
+            // Draw gradient background (same as title screen)
+            const bgGradient = exportCtx.createLinearGradient(0, 0, 0, 500);
+            bgGradient.addColorStop(0, '#1a1a2e');
+            bgGradient.addColorStop(1, '#2a2a4e');
+            exportCtx.fillStyle = bgGradient;
+            exportCtx.fillRect(0, 0, 1500, 500);
+
+            // Decorative ground line
+            const groundY = 420;
+            exportCtx.fillStyle = '#3a3a5e';
+            exportCtx.fillRect(0, groundY, 1500, 80);
+
+            // Draw Cooper on the left side (scaled up)
+            const cooperScale = 4.5; // Larger for banner
+            const cooperX = 120;
+            const cooperY = 180;
+
+            const tempCanvas = canvas;
+            const tempCtx = ctx;
+            canvas = exportCanvas;
+            ctx = exportCtx;
+
+            exportCtx.save();
+            exportCtx.scale(cooperScale, cooperScale);
+            drawCooper(cooperX / cooperScale, cooperY / cooperScale, 0);
+            exportCtx.restore();
+
+            canvas = tempCanvas;
+            ctx = tempCtx;
+
+            // Text content centered on the right side
+            const textCenterX = 900;
+
+            // "COOPER" title
+            exportCtx.fillStyle = 'white';
+            exportCtx.strokeStyle = 'black';
+            exportCtx.lineWidth = 8;
+            exportCtx.font = 'bold 120px Courier New';
+            exportCtx.textAlign = 'center';
+            exportCtx.strokeText('COOPER', textCenterX, 200);
+            exportCtx.fillText('COOPER', textCenterX, 200);
+
+            // "THE DOG RUNNER" subtitle
+            exportCtx.font = 'bold 32px Courier New';
+            exportCtx.fillStyle = '#FFD700';
+            exportCtx.fillText('THE DOG RUNNER', textCenterX, 250);
+
+            // "Press Space to Fetch"
+            exportCtx.font = 'bold 28px Courier New';
+            exportCtx.fillStyle = 'white';
+            exportCtx.strokeStyle = 'black';
+            exportCtx.lineWidth = 5;
+            exportCtx.strokeText('PRESS SPACE TO FETCH', textCenterX, 300);
+            exportCtx.fillText('PRESS SPACE TO FETCH', textCenterX, 300);
+
+            // High Score
+            if (highScore > 0) {
+                exportCtx.font = 'bold 24px Courier New';
+                exportCtx.fillStyle = '#FFD700';
+                exportCtx.strokeStyle = 'black';
+                exportCtx.lineWidth = 4;
+                exportCtx.strokeText(`HIGH SCORE: ${highScore}`, textCenterX, 345);
+                exportCtx.fillText(`HIGH SCORE: ${highScore}`, textCenterX, 345);
+            }
+
+            // "Built with Claude" at the bottom
+            exportCtx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+            exportCtx.font = '20px Courier New';
+            exportCtx.textAlign = 'center';
+            exportCtx.fillText('Built with Claude', 750, 475);
+
+            // Trigger download
+            exportCanvas.toBlob(function(blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.download = 'cooper-banner-1500x500.png';
+                link.href = url;
+                link.click();
+                URL.revokeObjectURL(url);
+            }, 'image/png');
+
+            console.log('Cooper banner exported as 1500x500 PNG!');
+        }
+
+        // ===== INITIALIZATION =====
+        function init() {
+            canvas = document.getElementById('gameCanvas');
+            ctx = canvas.getContext('2d');
+
+            // Set canvas size
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // Load high score
+            highScore = parseInt(localStorage.getItem('cooperHighScore')) || 0;
+
+            // Input handlers
+            document.addEventListener('keydown', handleKeyDown);
+            canvas.addEventListener('touchstart', handleTouch);
+            canvas.addEventListener('click', handleClick);
+
+            // Detect mobile
+            isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+            // Start game loop
+            gameLoop();
+        }
+
+        function resizeCanvas() {
+            const scale = Math.min(
+                window.innerWidth / CONFIG.WIDTH,
+                window.innerHeight / CONFIG.HEIGHT
+            );
+
+            canvas.width = CONFIG.WIDTH;
+            canvas.height = CONFIG.HEIGHT;
+            canvas.style.width = (CONFIG.WIDTH * scale) + 'px';
+            canvas.style.height = (CONFIG.HEIGHT * scale) + 'px';
+        }
+
+        // ===== INPUT HANDLING =====
+        function handleKeyDown(e) {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                handleAction();
+            }
+        }
+
+        function handleTouch(e) {
+            e.preventDefault();
+            handleAction();
+        }
+
+        function handleClick(e) {
+            // Get click coordinates relative to canvas
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = CONFIG.WIDTH / rect.width;
+            const scaleY = CONFIG.HEIGHT / rect.height;
+            const clickX = (e.clientX - rect.left) * scaleX;
+            const clickY = (e.clientY - rect.top) * scaleY;
+
+            // Check if clicked on export button (only on title screen)
+            if (gameState === GAME_STATE.TITLE) {
+                const btnX = CONFIG.WIDTH - 140;
+                const btnY = CONFIG.HEIGHT - 45;
+                const btnW = 125;
+                const btnH = 28;
+
+                if (clickX >= btnX && clickX <= btnX + btnW &&
+                    clickY >= btnY && clickY <= btnY + btnH) {
+                    exportCooperBanner();
+                    return;
+                }
+            }
+
+            handleAction();
+        }
+
+        function handleAction() {
+            if (gameState === GAME_STATE.TITLE) {
+                startZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                jump();
+            } else if (gameState === GAME_STATE.GAME_OVER) {
+                resetGame();
+            }
+        }
+
+        // ===== UTILITY FUNCTIONS =====
+        function easeOutCubic(t) {
+            return 1 - Math.pow(1 - t, 3);
+        }
+
+        // ===== GAME STATE MANAGEMENT =====
+        function startZoomTransition() {
+            gameState = GAME_STATE.ZOOM_TRANSITION;
+            zoomTransition.frame = 0;
+            zoomTransition.scale = 3.0;
+
+            // Initialize ball for throw during zoom (flat, high trajectory)
+            ball.frame = 0;
+            ball.x = 50;
+            ball.y = CONFIG.COOPER_GROUND_Y - 30; // Start high
+            ball.velocityX = 12; // Fast horizontal movement
+            ball.velocityY = -1.5; // Slight upward rise, stays high
+
+            // Initialize background for transition
+            backgroundLayers.clouds.offset = 0;
+            backgroundLayers.buildings.offset = 0;
+            backgroundLayers.airplanes = [
+                { x: CONFIG.WIDTH + 200, y: 80 + Math.random() * 40, speed: 0.3 }
+            ];
+        }
+
+        function startGame() {
+            gameState = GAME_STATE.PLAYING;
+            score = 0;
+            level = 1;
+            gameSpeed = CONFIG.BASE_SPEED;
+            obstacles = [];
+            nextObstacleDistance = 400;
+            groundOffset = 0;
+            frameCount = 0;
+
+            cooper.y = CONFIG.COOPER_GROUND_Y;
+            cooper.velocityY = 0;
+            cooper.isJumping = false;
+
+            // Initialize background layers
+            backgroundLayers.clouds.offset = 0;
+            backgroundLayers.buildings.offset = 0;
+            backgroundLayers.airplanes = [
+                { x: CONFIG.WIDTH + 200, y: 80 + Math.random() * 40, speed: 0.3 }
+            ];
+        }
+
+        function resetGame() {
+            gameState = GAME_STATE.TITLE;
+        }
+
+        function gameOver() {
+            gameState = GAME_STATE.GAME_OVER;
+
+            // Update high score
+            if (score > highScore) {
+                highScore = score;
+                localStorage.setItem('cooperHighScore', highScore);
+            }
+        }
+
+        // ===== PLAYER ACTIONS =====
+        function jump() {
+            if (!cooper.isJumping) {
+                cooper.velocityY = CONFIG.JUMP_FORCE;
+                cooper.isJumping = true;
+            }
+        }
+
+        // ===== UPDATE LOGIC =====
+        function update() {
+            if (gameState === GAME_STATE.ZOOM_TRANSITION) {
+                updateZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                updatePlaying();
+            }
+        }
+
+        function updateZoomTransition() {
+            zoomTransition.frame++;
+
+            // Update ball physics (starts at frame 20)
+            if (zoomTransition.frame >= 20) {
+                ball.x += ball.velocityX;
+                ball.y += ball.velocityY;
+                // Minimal gravity - ball stays high and flat
+                ball.velocityY += 0.05;
+            }
+
+            // Check if zoom transition is complete
+            if (zoomTransition.frame >= zoomTransition.maxFrames) {
+                startGame();
+            }
+        }
+
+        function updatePlaying() {
+            frameCount++;
+
+            // Update score
+            score += CONFIG.POINTS_PER_FRAME;
+
+            // Check for level up
+            const newLevel = Math.floor(score / CONFIG.POINTS_PER_LEVEL) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                gameSpeed = CONFIG.BASE_SPEED + (level - 1) * CONFIG.SPEED_INCREASE_PER_LEVEL;
+                levelUpTimer = 60; // Show "LEVEL UP" for 60 frames
+
+                // Change day/night every 3 levels
+                if (level % 3 === 0) {
+                    isDayTime = !isDayTime;
+                }
+            }
+
+            if (levelUpTimer > 0) levelUpTimer--;
+
+            // Update Cooper
+            updateCooper();
+
+            // Update ground
+            groundOffset = (groundOffset + gameSpeed) % 40;
+
+            // Update parallax background layers
+            backgroundLayers.clouds.offset = (backgroundLayers.clouds.offset + gameSpeed * 0.2) % 400;
+            backgroundLayers.buildings.offset = (backgroundLayers.buildings.offset + gameSpeed * 0.5) % 1680; // 14 elements × 120px spacing
+
+            // Update airplanes
+            for (let i = backgroundLayers.airplanes.length - 1; i >= 0; i--) {
+                backgroundLayers.airplanes[i].x -= gameSpeed * backgroundLayers.airplanes[i].speed;
+
+                // Respawn airplane when it goes off screen
+                if (backgroundLayers.airplanes[i].x < -300) {
+                    backgroundLayers.airplanes[i].x = CONFIG.WIDTH + 200 + Math.random() * 400;
+                    backgroundLayers.airplanes[i].y = 80 + Math.random() * 40;
+                }
+            }
+
+            // Spawn second airplane if only one exists and conditions are right
+            if (backgroundLayers.airplanes.length < 2 && Math.random() < 0.002) {
+                backgroundLayers.airplanes.push({
+                    x: CONFIG.WIDTH + 200,
+                    y: 60 + Math.random() * 50,
+                    speed: 0.3
+                });
+            }
+
+            // Update obstacles
+            updateObstacles();
+
+            // Check collisions
+            checkCollisions();
+        }
+
+        function updateCooper() {
+            // Apply gravity
+            cooper.velocityY += CONFIG.GRAVITY;
+            cooper.y += cooper.velocityY;
+
+            // Ground collision
+            if (cooper.y >= CONFIG.COOPER_GROUND_Y) {
+                cooper.y = CONFIG.COOPER_GROUND_Y;
+                cooper.velocityY = 0;
+                cooper.isJumping = false;
+            }
+
+            // Animation
+            cooper.animTimer++;
+            if (cooper.animTimer > 5) {
+                cooper.animTimer = 0;
+                cooper.prevPrevLegFrame = cooper.prevLegFrame;
+                cooper.prevLegFrame = cooper.animFrame;
+                cooper.animFrame = (cooper.animFrame + 1) % 8;
+            }
+        }
+
+        function updateObstacles() {
+            // Spawn new obstacles
+            nextObstacleDistance -= gameSpeed;
+            if (nextObstacleDistance <= 0) {
+                spawnObstacle();
+                nextObstacleDistance = CONFIG.OBSTACLE_MIN_GAP +
+                    Math.random() * (CONFIG.OBSTACLE_MAX_GAP - CONFIG.OBSTACLE_MIN_GAP);
+            }
+
+            // Move obstacles
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= gameSpeed;
+
+                // Remove off-screen obstacles
+                if (obstacles[i].x + obstacles[i].width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        function spawnObstacle() {
+            const type = getObstacleType();
+            const baseY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            switch(type) {
+                case 'hydrant':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 43,
+                        width: 29,
+                        height: 43,
+                        type: 'hydrant'
+                    });
+                    break;
+
+                case 'mailbox_blue':
+                case 'mailbox_green':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 47,
+                        width: 32,
+                        height: 47,
+                        type: type
+                    });
+                    break;
+
+                case 'cone':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 36,
+                        width: 25,
+                        height: 36,
+                        type: 'cone'
+                    });
+                    break;
+
+                case 'barrier':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 23,
+                        width: 43,
+                        height: 23,
+                        type: 'barrier'
+                    });
+                    break;
+
+                case 'trash_bin':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 43,
+                        width: 36,
+                        height: 43,
+                        type: 'trash_bin'
+                    });
+                    break;
+
+                case 'double_cone':
+                    obstacles.push({
+                        x: CONFIG.WIDTH,
+                        y: baseY - 36,
+                        width: 25,
+                        height: 36,
+                        type: 'cone'
+                    });
+                    obstacles.push({
+                        x: CONFIG.WIDTH + 54,
+                        y: baseY - 36,
+                        width: 25,
+                        height: 36,
+                        type: 'cone'
+                    });
+                    break;
+            }
+        }
+
+        function getObstacleType() {
+            if (level < 3) {
+                // Levels 1-2: Simple obstacles
+                return Math.random() < 0.5 ? 'hydrant' : 'cone';
+            } else if (level < 5) {
+                // Levels 3-4: Add mailboxes
+                const rand = Math.random();
+                if (rand < 0.3) return 'hydrant';
+                if (rand < 0.5) return 'cone';
+                if (rand < 0.75) return 'mailbox_blue';
+                return 'mailbox_green';
+            } else if (level < 7) {
+                // Levels 5-6: Add barrier and double obstacles
+                const rand = Math.random();
+                if (rand < 0.2) return 'hydrant';
+                if (rand < 0.35) return 'cone';
+                if (rand < 0.5) return 'mailbox_blue';
+                if (rand < 0.65) return 'mailbox_green';
+                if (rand < 0.8) return 'barrier';
+                return 'double_cone';
+            } else {
+                // Level 7+: Add trash bin
+                const rand = Math.random();
+                if (rand < 0.15) return 'hydrant';
+                if (rand < 0.28) return 'cone';
+                if (rand < 0.42) return 'mailbox_blue';
+                if (rand < 0.56) return 'mailbox_green';
+                if (rand < 0.70) return 'barrier';
+                if (rand < 0.85) return 'trash_bin';
+                return 'double_cone';
+            }
+        }
+
+        function checkCollisions() {
+            const cooperBox = {
+                x: cooper.x + 4,
+                y: cooper.y + 4,
+                width: CONFIG.COOPER_WIDTH - 8,
+                height: CONFIG.COOPER_HEIGHT - 8
+            };
+
+            for (let obstacle of obstacles) {
+                const obstacleBox = {
+                    x: obstacle.x + 2,
+                    y: obstacle.y + 2,
+                    width: obstacle.width - 4,
+                    height: obstacle.height - 4
+                };
+
+                if (boxCollision(cooperBox, obstacleBox)) {
+                    gameOver();
+                    return;
+                }
+            }
+        }
+
+        function boxCollision(box1, box2) {
+            return box1.x < box2.x + box2.width &&
+                   box1.x + box1.width > box2.x &&
+                   box1.y < box2.y + box2.height &&
+                   box1.y + box1.height > box2.y;
+        }
+
+        // ===== RENDERING =====
+        function render() {
+            // Clear canvas
+            ctx.clearRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Draw background
+            drawBackground();
+
+            if (gameState === GAME_STATE.TITLE) {
+                drawTitle();
+            } else if (gameState === GAME_STATE.ZOOM_TRANSITION) {
+                drawZoomTransition();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                drawPlaying();
+            } else if (gameState === GAME_STATE.GAME_OVER) {
+                drawGameOver();
+            }
+        }
+
+        function drawBackground() {
+            // Sky gradient (day/night cycle)
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, CONFIG.HEIGHT);
+            if (isDayTime) {
+                skyGradient.addColorStop(0, '#87CEEB');
+                skyGradient.addColorStop(1, '#B0E0E6');
+            } else {
+                skyGradient.addColorStop(0, '#0d1b2a');
+                skyGradient.addColorStop(1, '#1b263b');
+            }
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Only draw parallax layers if playing or game over
+            if (gameState === GAME_STATE.PLAYING || gameState === GAME_STATE.GAME_OVER) {
+                drawClouds();
+                drawAirplanes();
+                drawBuildings();
+            }
+
+            // Ground
+            drawGround();
+        }
+
+        function drawClouds() {
+            const cloudColor = isDayTime ? '#FFFFFF' : '#2d3142';
+            ctx.fillStyle = cloudColor;
+
+            // Draw repeating cloud pattern
+            const cloudPattern = [
+                { x: 50, y: 40, w: 60, h: 20 },
+                { x: 180, y: 60, w: 80, h: 25 },
+                { x: 320, y: 35, w: 70, h: 22 }
+            ];
+
+            for (let offsetX = -backgroundLayers.clouds.offset; offsetX < CONFIG.WIDTH + 200; offsetX += 400) {
+                for (let cloud of cloudPattern) {
+                    const x = offsetX + cloud.x;
+                    if (x > -100 && x < CONFIG.WIDTH + 100) {
+                        // Simple cloud shape using ellipses
+                        ctx.beginPath();
+                        ctx.ellipse(x, cloud.y, cloud.w / 2, cloud.h / 2, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.ellipse(x + cloud.w / 3, cloud.y - 5, cloud.w / 3, cloud.h / 2.5, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.beginPath();
+                        ctx.ellipse(x - cloud.w / 4, cloud.y, cloud.w / 3.5, cloud.h / 3, 0, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        function drawAirplanes() {
+            for (let plane of backgroundLayers.airplanes) {
+                if (plane.x > -300 && plane.x < CONFIG.WIDTH + 100) {
+                    drawAirplaneBanner(plane.x, plane.y);
+                }
+            }
+        }
+
+        function drawAirplaneBanner(x, y) {
+            // Banner
+            ctx.fillStyle = isDayTime ? '#FFFFFF' : '#F0F0F0';
+            ctx.fillRect(x - 220, y + 4, 200, 24);
+
+            // Banner text
+            ctx.fillStyle = isDayTime ? '#2a2a2a' : '#1a1a1a';
+            ctx.font = 'bold 9px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('BUILT WITH CLAUDE', x - 120, y + 18);
+
+            // Banner outline
+            ctx.strokeStyle = isDayTime ? '#d0d0d0' : '#c0c0c0';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - 220, y + 4, 200, 24);
+
+            // Rope connecting banner to plane
+            ctx.strokeStyle = isDayTime ? '#8B7355' : '#6a5a42';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x - 20, y + 14);
+            ctx.lineTo(x, y + 10);
+            ctx.stroke();
+
+            // Airplane (simple pixel art)
+            ctx.fillStyle = isDayTime ? '#C0C0C0' : '#A0A0A0';
+
+            // Fuselage
+            ctx.fillRect(x, y + 8, 24, 6);
+
+            // Wings
+            ctx.fillRect(x + 6, y + 4, 12, 2);
+            ctx.fillRect(x + 6, y + 20, 12, 2);
+
+            // Tail
+            ctx.fillRect(x, y + 6, 4, 10);
+
+            // Nose
+            ctx.fillRect(x + 22, y + 10, 4, 2);
+
+            // Windows
+            ctx.fillStyle = isDayTime ? '#4A90E2' : '#2a5a8a';
+            ctx.fillRect(x + 8, y + 10, 2, 2);
+            ctx.fillRect(x + 12, y + 10, 2, 2);
+            ctx.fillRect(x + 16, y + 10, 2, 2);
+        }
+
+        function drawTree(x, groundY) {
+            const treeColors = isDayTime ? {
+                trunk: '#8B4513',
+                leaves: '#2D5016'
+            } : {
+                trunk: '#5a3010',
+                leaves: '#1a3010'
+            };
+
+            // Trunk
+            ctx.fillStyle = treeColors.trunk;
+            ctx.fillRect(x + 22, groundY - 80, 16, 80);
+
+            // Leaves (rounded canopy)
+            ctx.fillStyle = treeColors.leaves;
+
+            // Bottom layer of canopy
+            ctx.fillRect(x + 10, groundY - 100, 40, 30);
+
+            // Middle layer
+            ctx.fillRect(x + 5, groundY - 120, 50, 30);
+
+            // Top layer
+            ctx.fillRect(x + 15, groundY - 135, 30, 20);
+        }
+
+        function drawStopSign(x, groundY) {
+            const signColors = isDayTime ? {
+                pole: '#696969',
+                red: '#DC143C',
+                redDark: '#B22222',
+                white: '#FFFFFF'
+            } : {
+                pole: '#4a4a4a',
+                red: '#B22222',
+                redDark: '#8B1A1A',
+                white: '#E0E0E0'
+            };
+
+            // Pole
+            ctx.fillStyle = signColors.pole;
+            ctx.fillRect(x + 26, groundY - 90, 8, 90);
+
+            // Pole base
+            ctx.fillRect(x + 22, groundY - 10, 16, 10);
+
+            // Octagonal stop sign (simplified as rectangle with corners cut)
+            const signY = groundY - 140;
+            const signX = x + 10;
+
+            // Main red octagon body
+            ctx.fillStyle = signColors.red;
+            ctx.fillRect(signX + 8, signY, 24, 40); // Vertical middle
+            ctx.fillRect(signX, signY + 8, 40, 24); // Horizontal middle
+
+            // Corner cuts (8 corners of octagon)
+            ctx.fillRect(signX + 5, signY + 3, 6, 5); // Top-left
+            ctx.fillRect(signX + 29, signY + 3, 6, 5); // Top-right
+            ctx.fillRect(signX + 3, signY + 5, 5, 6); // Left-top
+            ctx.fillRect(signX + 32, signY + 5, 5, 6); // Right-top
+            ctx.fillRect(signX + 3, signY + 29, 5, 6); // Left-bottom
+            ctx.fillRect(signX + 32, signY + 29, 5, 6); // Right-bottom
+            ctx.fillRect(signX + 5, signY + 32, 6, 5); // Bottom-left
+            ctx.fillRect(signX + 29, signY + 32, 6, 5); // Bottom-right
+
+            // White border around octagon
+            ctx.strokeStyle = signColors.white;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(signX + 11, signY + 3);
+            ctx.lineTo(signX + 29, signY + 3);
+            ctx.lineTo(signX + 37, signY + 11);
+            ctx.lineTo(signX + 37, signY + 29);
+            ctx.lineTo(signX + 29, signY + 37);
+            ctx.lineTo(signX + 11, signY + 37);
+            ctx.lineTo(signX + 3, signY + 29);
+            ctx.lineTo(signX + 3, signY + 11);
+            ctx.closePath();
+            ctx.stroke();
+
+            // "STOP" text
+            ctx.fillStyle = signColors.white;
+            ctx.font = 'bold 13px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('STOP', signX + 20, signY + 24);
+        }
+
+        function drawTrafficLight(x, groundY) {
+            const lightColors = isDayTime ? {
+                pole: '#696969',
+                box: '#2a2a2a',
+                boxDark: '#1a1a1a',
+                red: '#8B0000',
+                yellow: '#B8860B',
+                green: '#228B22',
+                greenGlow: '#00FF00'
+            } : {
+                pole: '#4a4a4a',
+                box: '#1a1a1a',
+                boxDark: '#0a0a0a',
+                red: '#660000',
+                yellow: '#8B6508',
+                green: '#1a6b1a',
+                greenGlow: '#00CC00'
+            };
+
+            // Pole
+            ctx.fillStyle = lightColors.pole;
+            ctx.fillRect(x + 24, groundY - 120, 12, 120);
+
+            // Pole base
+            ctx.fillRect(x + 20, groundY - 10, 20, 10);
+
+            // Traffic light box
+            const boxY = groundY - 180;
+            const boxX = x + 10;
+
+            ctx.fillStyle = lightColors.box;
+            ctx.fillRect(boxX, boxY, 40, 80);
+
+            // Box outline
+            ctx.strokeStyle = lightColors.boxDark;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(boxX, boxY, 40, 80);
+
+            // Red light (off)
+            ctx.fillStyle = lightColors.red;
+            ctx.beginPath();
+            ctx.arc(boxX + 20, boxY + 15, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Yellow light (off)
+            ctx.fillStyle = lightColors.yellow;
+            ctx.beginPath();
+            ctx.arc(boxX + 20, boxY + 40, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Green light (ON - active)
+            ctx.fillStyle = lightColors.greenGlow;
+            ctx.beginPath();
+            ctx.arc(boxX + 20, boxY + 65, 10, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Green light glow
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+            ctx.beginPath();
+            ctx.arc(boxX + 20, boxY + 65, 14, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Light separators
+            ctx.strokeStyle = lightColors.boxDark;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(boxX, boxY + 28);
+            ctx.lineTo(boxX + 40, boxY + 28);
+            ctx.moveTo(boxX, boxY + 53);
+            ctx.lineTo(boxX + 40, boxY + 53);
+            ctx.stroke();
+        }
+
+        function drawBuildings() {
+            const buildingColors = isDayTime ? {
+                base: '#4A4A4A',
+                accent: '#6A6A6A',
+                window: '#A8D8EA',
+                neon: '#FF69B4'
+            } : {
+                base: '#1a1a2e',
+                accent: '#2a2a3e',
+                window: '#FFD700',
+                neon: '#FF1493'
+            };
+
+            // Full 1680px pattern (14 elements × 120px spacing)
+            const elementTypes = [
+                // First 840px (positions 0-6)
+                { type: 'building', w: 80, h: 200, windows: true, sign: false },   // Position 0
+                { type: 'building', w: 100, h: 250, windows: true, sign: true },   // Position 1
+                { type: 'tree', w: 60, h: 135 },                                   // Position 2
+                { type: 'building', w: 70, h: 180, windows: true, sign: false },   // Position 3
+                { type: 'building', w: 120, h: 220, windows: true, sign: false },  // Position 4
+                { type: 'stop_sign', w: 60, h: 140 },                              // Position 5
+                { type: 'building', w: 90, h: 240, windows: true, sign: true },    // Position 6
+
+                // Second 840px (positions 7-13)
+                { type: 'building', w: 80, h: 200, windows: true, sign: false },   // Position 7
+                { type: 'building', w: 100, h: 250, windows: true, sign: true },   // Position 8
+                { type: 'tree', w: 60, h: 135 },                                   // Position 9
+                { type: 'building', w: 70, h: 180, windows: true, sign: false },   // Position 10
+                { type: 'building', w: 120, h: 220, windows: true, sign: false },  // Position 11
+                { type: 'traffic_light', w: 60, h: 180 },                          // Position 12
+                { type: 'building', w: 90, h: 240, windows: true, sign: true }     // Position 13
+            ];
+
+            let elementIndex = 0;
+            const groundY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            for (let offsetX = -backgroundLayers.buildings.offset; offsetX < CONFIG.WIDTH + 200; offsetX += 120) {
+                const element = elementTypes[elementIndex % 14];
+                elementIndex++;
+
+                const x = offsetX;
+
+                if (x > -150 && x < CONFIG.WIDTH + 50) {
+                    if (element.type === 'stop_sign') {
+                        drawStopSign(x, groundY);
+                    } else if (element.type === 'traffic_light') {
+                        drawTrafficLight(x, groundY);
+                    } else if (element.type === 'tree') {
+                        drawTree(x, groundY);
+                    } else if (element.type === 'building') {
+                        // Building
+                        const y = groundY - element.h;
+
+                        // Building base
+                        ctx.fillStyle = buildingColors.base;
+                        ctx.fillRect(x, y, element.w, element.h);
+
+                        // Building accent/edge
+                        ctx.fillStyle = buildingColors.accent;
+                        ctx.fillRect(x + element.w - 10, y, 10, element.h);
+
+                        // Windows
+                        if (element.windows) {
+                            ctx.fillStyle = buildingColors.window;
+                            for (let wy = y + 20; wy < y + element.h - 10; wy += 20) {
+                                for (let wx = x + 10; wx < x + element.w - 15; wx += 18) {
+                                    // Deterministic pattern based on position (skip some windows)
+                                    // Use simple hash of position to determine if window should appear
+                                    const hash = ((wx * 7) + (wy * 13)) % 10;
+                                    if (hash > 1) { // 80% of windows appear (hash 2-9 out of 0-9)
+                                        ctx.fillRect(wx, wy, 8, 12);
+
+                                        // Window glow effect at night
+                                        if (!isDayTime) {
+                                            ctx.fillStyle = 'rgba(255, 215, 0, 0.3)';
+                                            ctx.fillRect(wx - 2, wy - 2, 12, 16);
+                                            ctx.fillStyle = buildingColors.window;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // CLAUDE neon sign on some buildings
+                        if (element.sign) {
+                            const signY = y + 30;
+                            const signX = x + element.w / 2 - 25;
+
+                            // Sign background
+                            ctx.fillStyle = buildingColors.accent;
+                            ctx.fillRect(signX - 4, signY - 4, 54, 18);
+
+                            // Neon text
+                            ctx.fillStyle = buildingColors.neon;
+                            ctx.font = 'bold 11px Courier New';
+                            ctx.textAlign = 'center';
+                            ctx.fillText('CLAUDE', signX + 23, signY + 9);
+
+                            // Glow effect for neon at night
+                            if (!isDayTime) {
+                                ctx.shadowColor = buildingColors.neon;
+                                ctx.shadowBlur = 10;
+                                ctx.fillText('CLAUDE', signX + 23, signY + 9);
+                                ctx.shadowBlur = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function drawGround() {
+            const groundY = CONFIG.COOPER_GROUND_Y + CONFIG.COOPER_HEIGHT;
+
+            // Ground line (sidewalk edge)
+            ctx.strokeStyle = isDayTime ? '#5A5A5A' : '#2a2a3a';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, groundY);
+            ctx.lineTo(CONFIG.WIDTH, groundY);
+            ctx.stroke();
+
+            // Ground/sidewalk
+            ctx.fillStyle = isDayTime ? '#707070' : '#3a3a3a';
+            ctx.fillRect(0, groundY, CONFIG.WIDTH, CONFIG.HEIGHT - groundY);
+
+            // Sidewalk tile lines (horizontal)
+            ctx.strokeStyle = isDayTime ? '#5A5A5A' : '#2a2a2a';
+            ctx.lineWidth = 1;
+            for (let y = groundY + 20; y < CONFIG.HEIGHT; y += 20) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(CONFIG.WIDTH, y);
+                ctx.stroke();
+            }
+
+            // Sidewalk tile lines (vertical, scrolling)
+            for (let i = -groundOffset; i < CONFIG.WIDTH; i += 40) {
+                ctx.beginPath();
+                ctx.moveTo(i, groundY);
+                ctx.lineTo(i, CONFIG.HEIGHT);
+                ctx.stroke();
+            }
+        }
+
+        function drawTitle() {
+            // Gradient background for title
+            const bgGradient = ctx.createLinearGradient(0, 0, 0, CONFIG.HEIGHT);
+            bgGradient.addColorStop(0, '#1a1a2e');
+            bgGradient.addColorStop(1, '#2a2a4e');
+            ctx.fillStyle = bgGradient;
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Decorative ground line
+            const groundY = CONFIG.HEIGHT - 80;
+            ctx.fillStyle = '#3a3a5e';
+            ctx.fillRect(0, groundY, CONFIG.WIDTH, 80);
+
+            // Draw large Cooper icon/emote in center
+            const cooperScale = 2.5;
+            const cooperX = CONFIG.WIDTH / 2 - (CONFIG.COOPER_WIDTH * cooperScale) / 2;
+            const cooperY = CONFIG.HEIGHT / 2 - 100;
+
+            ctx.save();
+            ctx.scale(cooperScale, cooperScale);
+            drawCooper(cooperX / cooperScale, cooperY / cooperScale, 0);
+            ctx.restore();
+
+            // Title text below Cooper
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 4;
+            ctx.font = 'bold 50px Courier New';
+            ctx.textAlign = 'center';
+            ctx.strokeText('COOPER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 70);
+            ctx.fillText('COOPER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 70);
+
+            // Subtitle
+            ctx.font = 'bold 14px Courier New';
+            ctx.fillStyle = '#FFD700';
+            ctx.fillText('THE DOG RUNNER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+
+            // Instruction text
+            ctx.font = 'bold 16px Courier New';
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            const instructionText = isMobile ? 'TAP TO FETCH' : 'PRESS SPACE TO FETCH';
+            ctx.strokeText(instructionText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 130);
+            ctx.fillText(instructionText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 130);
+
+            // High score (with proper spacing)
+            if (highScore > 0) {
+                ctx.font = 'bold 13px Courier New';
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.strokeText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 160);
+                ctx.fillText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 160);
+            }
+
+            // "How to Play" card on the right side (smaller and compact)
+            const cardX = CONFIG.WIDTH - 170;
+            const cardY = CONFIG.HEIGHT / 2 - 70;
+            const cardW = 155;
+            const cardH = 140;
+
+            // Paper shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(cardX + 3, cardY + 3, cardW, cardH);
+
+            // Paper background (off-white with slight cream tint)
+            ctx.fillStyle = '#F5F5DC';
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+
+            // Paper border
+            ctx.strokeStyle = '#D3C6A6';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+            // Inner border decoration
+            ctx.strokeStyle = '#E8DCC4';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(cardX + 6, cardY + 6, cardW - 12, cardH - 12);
+
+            // Card content
+            ctx.fillStyle = '#2a2a2a';
+            ctx.textAlign = 'center';
+
+            // Title
+            ctx.font = 'bold 12px Courier New';
+            ctx.fillText('HOW TO PLAY', cardX + cardW / 2, cardY + 22);
+
+            // Divider line
+            ctx.strokeStyle = '#D3C6A6';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(cardX + 15, cardY + 30);
+            ctx.lineTo(cardX + cardW - 15, cardY + 30);
+            ctx.stroke();
+
+            // Instructions (compact)
+            ctx.font = '9px Courier New';
+            ctx.textAlign = 'left';
+
+            ctx.fillText('PC: [SPACE] to Jump', cardX + 15, cardY + 50);
+            ctx.fillText('Mobile: TAP to Jump', cardX + 15, cardY + 70);
+
+            // Additional info
+            ctx.font = 'bold 9px Courier New';
+            ctx.fillStyle = '#DC143C';
+            ctx.textAlign = 'center';
+            ctx.fillText('Avoid obstacles!', cardX + cardW / 2, cardY + 95);
+
+            ctx.fillStyle = '#2a2a2a';
+            ctx.font = '8px Courier New';
+            ctx.fillText('Level up every', cardX + cardW / 2, cardY + 115);
+            ctx.fillText('500 points', cardX + cardW / 2, cardY + 127);
+
+            // "Built with Claude" at the bottom center
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.font = '10px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('Built with Claude', CONFIG.WIDTH / 2, CONFIG.HEIGHT - 15);
+
+            // Export button in bottom right corner
+            const btnX = CONFIG.WIDTH - 140;
+            const btnY = CONFIG.HEIGHT - 45;
+            const btnW = 125;
+            const btnH = 28;
+
+            // Button background
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+
+            // Button border
+            ctx.strokeStyle = '#B8860B';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(btnX, btnY, btnW, btnH);
+
+            // Button text
+            ctx.fillStyle = '#1a1a2e';
+            ctx.font = 'bold 11px Courier New';
+            ctx.textAlign = 'center';
+            ctx.fillText('Download Banner', btnX + btnW / 2, btnY + btnH / 2 + 4);
+        }
+
+        function drawZoomTransition() {
+            // Calculate zoom progress with easing
+            const progress = zoomTransition.frame / zoomTransition.maxFrames;
+            const easedProgress = easeOutCubic(progress);
+            const currentScale = zoomTransition.scale - ((zoomTransition.scale - zoomTransition.targetScale) * easedProgress);
+
+            // Draw full city scene with zoom
+            ctx.save();
+            ctx.translate(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2);
+            ctx.scale(currentScale, currentScale);
+            ctx.translate(-CONFIG.WIDTH / 2, -CONFIG.HEIGHT / 2);
+
+            // Draw background layers (clouds, buildings, etc.)
+            drawClouds();
+            drawAirplanes();
+            drawBuildings();
+            drawGround();
+
+            // Draw Cooper
+            drawCooper(CONFIG.COOPER_X, CONFIG.COOPER_GROUND_Y, 0);
+
+            // Draw tennis ball (starts appearing at frame 20)
+            if (zoomTransition.frame >= 20) {
+                drawTennisBall(ball.x, ball.y, CONFIG.BALL_SIZE / 2);
+            }
+
+            ctx.restore();
+        }
+
+        function drawPlaying() {
+            // Draw ground (already drawn in background)
+
+            // Draw obstacles
+            for (let obstacle of obstacles) {
+                drawObstacle(obstacle);
+            }
+
+            // Draw Cooper
+            drawCooper(cooper.x, cooper.y, cooper.animFrame);
+
+            // Draw UI
+            drawUI();
+
+            // Draw level up notification
+            if (levelUpTimer > 0) {
+                const alpha = levelUpTimer / 60;
+                const scale = 1 + (1 - alpha) * 0.3; // Slight zoom in effect
+
+                ctx.save();
+                ctx.globalAlpha = alpha;
+                ctx.translate(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2);
+                ctx.scale(scale, scale);
+
+                // Glow effect
+                ctx.shadowColor = '#FFD700';
+                ctx.shadowBlur = 20;
+
+                ctx.fillStyle = '#FFD700';
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 5;
+                ctx.font = 'bold 43px Courier New';
+                ctx.textAlign = 'center';
+                ctx.strokeText('LEVEL UP!', 0, 0);
+                ctx.fillText('LEVEL UP!', 0, 0);
+
+                ctx.shadowBlur = 0;
+                ctx.restore();
+            }
+        }
+
+        function drawGameOver() {
+            // Draw static game scene
+            for (let obstacle of obstacles) {
+                drawObstacle(obstacle);
+            }
+            drawCooper(cooper.x, cooper.y, 0);
+
+            // Game over overlay (darker)
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+
+            // Game over box background
+            ctx.fillStyle = 'rgba(26, 26, 46, 0.9)';
+            ctx.fillRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+
+            // Game over text
+            ctx.fillStyle = '#FF4444';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 5;
+            ctx.font = 'bold 50px Courier New';
+            ctx.textAlign = 'center';
+            ctx.strokeText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
+            ctx.fillText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
+
+            // Score
+            ctx.fillStyle = 'white';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 29px Courier New';
+            ctx.strokeText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
+            ctx.fillText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
+
+            // High score
+            ctx.font = 'bold 22px Courier New';
+            ctx.fillStyle = '#FFD700';
+            ctx.strokeText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
+            ctx.fillText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
+
+            // New high score message
+            if (score === highScore && score > 0) {
+                ctx.font = 'bold 14px Courier New';
+                ctx.fillStyle = '#FFD700';
+                ctx.fillText('NEW HIGH SCORE!', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 55);
+            }
+
+            // Play again
+            ctx.font = 'bold 16px Courier New';
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            const playAgainText = isMobile ? 'TAP TO PLAY AGAIN' : 'PRESS SPACE TO PLAY AGAIN';
+            ctx.strokeText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+            ctx.fillText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+        }
+
+        function drawUI() {
+            ctx.textAlign = 'left';
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 3;
+            ctx.font = 'bold 22px Courier New';
+
+            // Level
+            ctx.strokeText(`LEVEL ${level}`, 20, 35);
+            ctx.fillText(`LEVEL ${level}`, 20, 35);
+
+            // Score (top right)
+            ctx.textAlign = 'right';
+            ctx.strokeText(`${score}`, CONFIG.WIDTH - 20, 35);
+            ctx.fillText(`${score}`, CONFIG.WIDTH - 20, 35);
+
+            // High score (below score)
+            ctx.font = 'bold 14px Courier New';
+            ctx.strokeText(`HI: ${highScore}`, CONFIG.WIDTH - 20, 60);
+            ctx.fillText(`HI: ${highScore}`, CONFIG.WIDTH - 20, 60);
+        }
+
+        // ===== SPRITE DRAWING =====
+        function drawCooper(x, y, frame) {
+            const w = CONFIG.COOPER_WIDTH;
+            const h = CONFIG.COOPER_HEIGHT;
+
+            // Motion lines (vibration effect)
+            if (gameState === GAME_STATE.PLAYING && frame % 2 === 0) {
+                ctx.strokeStyle = 'rgba(210, 105, 30, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(x - 2, y + 13);
+                ctx.lineTo(x - 5, y + 13);
+                ctx.moveTo(x - 2, y + 22);
+                ctx.lineTo(x - 5, y + 22);
+                ctx.stroke();
+            } else if (gameState === GAME_STATE.PLAYING) {
+                ctx.strokeStyle = 'rgba(210, 105, 30, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(x - 2, y + 18);
+                ctx.lineTo(x - 5, y + 18);
+                ctx.moveTo(x - 2, y + 27);
+                ctx.lineTo(x - 5, y + 27);
+                ctx.stroke();
+            }
+
+            // Body color
+            ctx.fillStyle = '#D2691E'; // Brown
+
+            // Body (90% size)
+            ctx.fillRect(x + 7, y + 18, 29, 22);
+
+            // Head (facing right, 90% size)
+            ctx.fillRect(x + 22, y + 7, 22, 22);
+
+            // Snout (on right side)
+            ctx.fillStyle = '#8B4513'; // Darker brown
+            ctx.fillRect(x + 38, y + 16, 9, 9);
+
+            // Tongue sticking out (pink)
+            ctx.fillStyle = '#FF69B4';
+            ctx.fillRect(x + 45, y + 22, 5, 3);
+            ctx.fillRect(x + 47, y + 24, 3, 2);
+
+            // Ear (on left of head, floppy)
+            ctx.fillStyle = '#A0522D';
+            ctx.fillRect(x + 18, y + 4, 7, 11);
+            ctx.fillRect(x + 20, y + 13, 4, 4);
+
+            // Eye (90% size)
+            ctx.fillStyle = 'black';
+            ctx.fillRect(x + 29, y + 13, 4, 4);
+            // Eye shine
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x + 31, y + 13, 2, 2);
+
+            // Nose (on snout tip, black)
+            ctx.fillStyle = 'black';
+            ctx.fillRect(x + 43, y + 20, 3, 3);
+
+            // Draw leg motion blur (semi-transparent previous positions)
+            if (gameState === GAME_STATE.PLAYING && frame % 2 === 1) {
+                // Previous leg position (40% opacity)
+                if (cooper.prevLegFrame >= 0) {
+                    ctx.save();
+                    ctx.globalAlpha = 0.4;
+                    drawLegs(x, y, cooper.prevLegFrame);
+                    ctx.restore();
+                }
+
+                // Previous previous leg position (20% opacity)
+                if (cooper.prevPrevLegFrame >= 0) {
+                    ctx.save();
+                    ctx.globalAlpha = 0.2;
+                    drawLegs(x, y, cooper.prevPrevLegFrame);
+                    ctx.restore();
+                }
+            }
+
+            // Draw current legs at full opacity
+            drawLegs(x, y, frame);
+
+            // Tail (on left side, wagging)
+            ctx.fillStyle = '#A0522D';
+            if (frame % 4 < 2) {
+                ctx.fillRect(x + 4, y + 22, 5, 7);
+                ctx.fillRect(x + 4, y + 18, 3, 5);
+            } else {
+                ctx.fillRect(x + 4, y + 23, 5, 7);
+                ctx.fillRect(x + 5, y + 20, 3, 5);
+            }
+        }
+
+        // Helper function to draw tennis ball
+        function drawTennisBall(x, y, radius) {
+            // Neon green/yellow tennis ball
+            ctx.fillStyle = '#CCFF00';
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // White curved seam lines (classic tennis ball pattern)
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 1.5;
+
+            // Left curve
+            ctx.beginPath();
+            ctx.arc(x - radius * 0.3, y, radius * 0.9, -Math.PI * 0.6, Math.PI * 0.6);
+            ctx.stroke();
+
+            // Right curve
+            ctx.beginPath();
+            ctx.arc(x + radius * 0.3, y, radius * 0.9, Math.PI * 0.4, Math.PI * 1.6);
+            ctx.stroke();
+
+            // Shadow/depth
+            ctx.fillStyle = 'rgba(150, 200, 0, 0.3)';
+            ctx.beginPath();
+            ctx.arc(x + radius * 0.3, y + radius * 0.3, radius * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Helper function to draw legs based on animation frame
+        function drawLegs(x, y, frame) {
+            ctx.fillStyle = '#D2691E';
+
+            // 8-frame leg cycle (90% size)
+            const legCycle = [
+                { front: { x: 27, y: 36, h: 11 }, back: { x: 13, y: 36, h: 11 } }, // Frame 0: neutral
+                { front: { x: 29, y: 34, h: 13 }, back: { x: 13, y: 38, h: 9 } },  // Frame 1: front up
+                { front: { x: 31, y: 32, h: 14 }, back: { x: 13, y: 40, h: 7 } },  // Frame 2: front high
+                { front: { x: 29, y: 34, h: 13 }, back: { x: 14, y: 38, h: 9 } },  // Frame 3: front down, back starting
+                { front: { x: 27, y: 36, h: 11 }, back: { x: 16, y: 36, h: 11 } }, // Frame 4: neutral
+                { front: { x: 27, y: 38, h: 9 },  back: { x: 18, y: 34, h: 13 } }, // Frame 5: back up
+                { front: { x: 27, y: 40, h: 7 },  back: { x: 20, y: 32, h: 14 } }, // Frame 6: back high
+                { front: { x: 27, y: 38, h: 9 },  back: { x: 16, y: 34, h: 13 } }  // Frame 7: back down
+            ];
+
+            const leg = legCycle[frame % 8];
+
+            // Front leg
+            ctx.fillRect(x + leg.front.x, y + leg.front.y, 5, leg.front.h);
+
+            // Back leg
+            ctx.fillRect(x + leg.back.x, y + leg.back.y, 5, leg.back.h);
+        }
+
+        function drawFireHydrant(x, y) {
+            // Black base
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(x + 7, y + 36, 14, 7);
+
+            // Red body
+            ctx.fillStyle = '#DC143C';
+            ctx.fillRect(x + 5, y + 11, 18, 25);
+
+            // Silver cap
+            ctx.fillStyle = '#C0C0C0';
+            ctx.fillRect(x + 7, y + 7, 14, 5);
+
+            // Side nozzles
+            ctx.fillStyle = '#A9A9A9';
+            ctx.fillRect(x + 2, y + 20, 5, 5);
+            ctx.fillRect(x + 22, y + 20, 5, 5);
+
+            // Details
+            ctx.strokeStyle = '#8B0000';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x + 5, y + 11, 18, 25);
+
+            // Bolts on cap
+            ctx.fillStyle = '#696969';
+            ctx.fillRect(x + 9, y + 9, 2, 2);
+            ctx.fillRect(x + 18, y + 9, 2, 2);
+        }
+
+        function drawMailbox(x, y, color) {
+            const isBlue = color === 'blue';
+            const boxColor = isBlue ? '#0066CC' : '#2D5016';
+            const darkColor = isBlue ? '#004488' : '#1a3010';
+
+            // Post
+            ctx.fillStyle = '#8B7355';
+            ctx.fillRect(x + 13, y + 29, 7, 18);
+
+            // Box body
+            ctx.fillStyle = boxColor;
+            ctx.fillRect(x + 4, y + 7, 25, 25);
+
+            // Rounded top
+            ctx.fillRect(x + 5, y + 4, 22, 5);
+
+            // Door/slot
+            ctx.fillStyle = darkColor;
+            ctx.fillRect(x + 7, y + 14, 18, 13);
+
+            // White stripe (USPS style for blue)
+            if (isBlue) {
+                ctx.fillStyle = 'white';
+                ctx.fillRect(x + 5, y + 11, 22, 3);
+            }
+
+            // Outline
+            ctx.strokeStyle = darkColor;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x + 4, y + 7, 25, 25);
+
+            // Flag
+            ctx.fillStyle = '#DC143C';
+            ctx.fillRect(x + 29, y + 13, 4, 7);
+            ctx.fillRect(x + 29, y + 13, 7, 3);
+        }
+
+        function drawTrafficCone(x, y) {
+            // Orange cone body
+            ctx.fillStyle = '#FF6600';
+
+            // Cone shape (stacked rectangles getting wider, 90% size)
+            ctx.fillRect(x + 9, y + 7, 7, 5);
+            ctx.fillRect(x + 7, y + 13, 11, 5);
+            ctx.fillRect(x + 5, y + 18, 14, 5);
+            ctx.fillRect(x + 4, y + 23, 18, 7);
+
+            // White reflective stripes
+            ctx.fillStyle = 'white';
+            ctx.fillRect(x + 7, y + 14, 11, 2);
+            ctx.fillRect(x + 5, y + 25, 16, 2);
+
+            // Black base
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(x + 2, y + 31, 22, 5);
+
+            // Outline
+            ctx.strokeStyle = '#CC5200';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(x + 13, y + 7);
+            ctx.lineTo(x + 4, y + 31);
+            ctx.lineTo(x + 22, y + 31);
+            ctx.lineTo(x + 13, y + 7);
+            ctx.stroke();
+        }
+
+        function drawStreetBarrier(x, y) {
+            // Support legs
+            ctx.fillStyle = '#696969';
+            ctx.fillRect(x + 4, y + 5, 4, 18);
+            ctx.fillRect(x + 36, y + 5, 4, 18);
+
+            // Main barrier bar
+            ctx.fillStyle = '#FFD700';
+            ctx.fillRect(x, y + 7, 43, 11);
+
+            // Black diagonal stripes
+            ctx.fillStyle = 'black';
+            for (let i = 0; i < 43; i += 11) {
+                ctx.fillRect(x + i, y + 7, 5, 11);
+            }
+
+            // Outline
+            ctx.strokeStyle = '#B8860B';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y + 7, 43, 11);
+
+            // Reflectors
+            ctx.fillStyle = '#FF4500';
+            ctx.fillRect(x + 2, y + 9, 3, 3);
+            ctx.fillRect(x + 39, y + 9, 3, 3);
+        }
+
+        function drawTrashBin(x, y) {
+            // Bin body (gray metal, 90% size)
+            ctx.fillStyle = '#696969';
+            ctx.fillRect(x + 4, y + 14, 29, 29);
+
+            // Darker shadow/depth
+            ctx.fillStyle = '#505050';
+            ctx.fillRect(x + 5, y + 18, 25, 22);
+
+            // Lid
+            ctx.fillStyle = '#505050';
+            ctx.fillRect(x + 2, y + 11, 32, 5);
+
+            // Lid handle
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(x + 14, y + 7, 7, 5);
+
+            // Bin details (vertical lines)
+            ctx.strokeStyle = '#505050';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x + 11, y + 18);
+            ctx.lineTo(x + 11, y + 43);
+            ctx.moveTo(x + 18, y + 18);
+            ctx.lineTo(x + 18, y + 43);
+            ctx.moveTo(x + 25, y + 18);
+            ctx.lineTo(x + 25, y + 43);
+            ctx.stroke();
+
+            // Outline
+            ctx.strokeStyle = '#2a2a2a';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x + 4, y + 14, 29, 29);
+            ctx.strokeRect(x + 2, y + 11, 32, 5);
+        }
+
+        // Unified obstacle drawing function
+        function drawObstacle(obstacle) {
+            const { type } = obstacle;
+
+            switch(type) {
+                case 'hydrant':
+                    drawFireHydrant(obstacle.x, obstacle.y);
+                    break;
+                case 'mailbox_blue':
+                    drawMailbox(obstacle.x, obstacle.y, 'blue');
+                    break;
+                case 'mailbox_green':
+                    drawMailbox(obstacle.x, obstacle.y, 'green');
+                    break;
+                case 'cone':
+                    drawTrafficCone(obstacle.x, obstacle.y);
+                    break;
+                case 'barrier':
+                    drawStreetBarrier(obstacle.x, obstacle.y);
+                    break;
+                case 'trash_bin':
+                    drawTrashBin(obstacle.x, obstacle.y);
+                    break;
+            }
+        }
+
+        // ===== GAME LOOP =====
+        function gameLoop() {
+            update();
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ===== START GAME =====
+        init();
+    </script>
+</body>
+</html>
