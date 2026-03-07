@@ -431,6 +431,10 @@
                 toggleMute();
                 return;
             }
+            if (gameState === GAME_STATE.GAME_OVER && isShareButtonClick(x, y)) {
+                window.open(getShareUrl(), '_blank');
+                return;
+            }
             handleAction();
         }
 
@@ -444,6 +448,10 @@
             if (isMuteButtonClick(x, y)) {
                 initAudio();
                 toggleMute();
+                return;
+            }
+            if (gameState === GAME_STATE.GAME_OVER && isShareButtonClick(x, y)) {
+                window.open(getShareUrl(), '_blank');
                 return;
             }
             handleAction();
@@ -1307,6 +1315,20 @@
             }
         }
 
+        // Share button bounds (used for click detection)
+        let shareButtonBounds = null;
+
+        function getShareUrl() {
+            const text = `I scored ${score} on @FROGE69mg Endless Runner \u{1F438}\u{1F4B0}\n\nbuilt by community member @aboy_nuel\n\nCan you beat me?\n\nPlay now: https://froge69-runner.vercel.app\n\n#Froge69mg`;
+            return 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(text);
+        }
+
+        function isShareButtonClick(x, y) {
+            if (!shareButtonBounds) return false;
+            return x >= shareButtonBounds.x && x <= shareButtonBounds.x + shareButtonBounds.w &&
+                   y >= shareButtonBounds.y && y <= shareButtonBounds.y + shareButtonBounds.h;
+        }
+
         function drawGameOver() {
             // Draw static game scene
             for (let obstacle of obstacles) {
@@ -1318,12 +1340,16 @@
             ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
             ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
 
+            const cx = CONFIG.WIDTH / 2;
+            const boxTop = CONFIG.HEIGHT / 2 - 140;
+            const boxHeight = 320;
+
             // Game over box background
             ctx.fillStyle = 'rgba(26, 26, 46, 0.9)';
-            ctx.fillRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+            ctx.fillRect(cx - 250, boxTop, 500, boxHeight);
             ctx.strokeStyle = '#FFD700';
             ctx.lineWidth = 3;
-            ctx.strokeRect(CONFIG.WIDTH / 2 - 250, CONFIG.HEIGHT / 2 - 120, 500, 240);
+            ctx.strokeRect(cx - 250, boxTop, 500, boxHeight);
 
             // Game over text
             ctx.fillStyle = '#FF4444';
@@ -1331,28 +1357,52 @@
             ctx.lineWidth = 5;
             ctx.font = 'bold 50px Courier New';
             ctx.textAlign = 'center';
-            ctx.strokeText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
-            ctx.fillText('GAME OVER', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 60);
+            ctx.strokeText('GAME OVER', cx, boxTop + 60);
+            ctx.fillText('GAME OVER', cx, boxTop + 60);
 
             // Score
             ctx.fillStyle = 'white';
             ctx.lineWidth = 3;
             ctx.font = 'bold 29px Courier New';
-            ctx.strokeText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
-            ctx.fillText(`SCORE: ${score}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 10);
+            ctx.strokeText(`SCORE: ${score}`, cx, boxTop + 110);
+            ctx.fillText(`SCORE: ${score}`, cx, boxTop + 110);
 
             // High score
             ctx.font = 'bold 22px Courier New';
             ctx.fillStyle = '#FFD700';
-            ctx.strokeText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
-            ctx.fillText(`HIGH SCORE: ${highScore}`, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 30);
+            ctx.strokeText(`HIGH SCORE: ${highScore}`, cx, boxTop + 145);
+            ctx.fillText(`HIGH SCORE: ${highScore}`, cx, boxTop + 145);
 
             // New high score message
             if (score === highScore && score > 0) {
                 ctx.font = 'bold 14px Courier New';
                 ctx.fillStyle = '#FFD700';
-                ctx.fillText('NEW HIGH SCORE!', CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 55);
+                ctx.fillText('NEW HIGH SCORE!', cx, boxTop + 170);
             }
+
+            // Share to X button
+            const btnW = 180;
+            const btnH = 40;
+            const btnX = cx - btnW / 2;
+            const btnY = boxTop + 190;
+            shareButtonBounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+
+            // Button background
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(btnX, btnY, btnW, btnH);
+
+            // Button text
+            ctx.fillStyle = '#FFD700';
+            ctx.font = 'bold 18px Courier New';
+            ctx.fillText('Share to \u{1D54F}', cx, btnY + 27);
+
+            // Screenshot helper text
+            ctx.font = '13px Courier New';
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.7)';
+            ctx.fillText('\u{1F4F8} Screenshot your score!', cx, btnY + 58);
 
             // Play again
             ctx.font = 'bold 16px Courier New';
@@ -1360,8 +1410,8 @@
             ctx.strokeStyle = 'black';
             ctx.lineWidth = 3;
             const playAgainText = isMobile ? 'TAP TO PLAY AGAIN' : 'PRESS SPACE TO PLAY AGAIN';
-            ctx.strokeText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
-            ctx.fillText(playAgainText, CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 95);
+            ctx.strokeText(playAgainText, cx, btnY + 90);
+            ctx.fillText(playAgainText, cx, btnY + 90);
         }
 
         function drawUI() {
